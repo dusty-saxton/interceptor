@@ -1,0 +1,136 @@
+18:19:55.559302 http.c:678              == Info: Couldn't find host github.com in the (nil) file; using defaults
+18:19:55.616338 http.c:678              == Info:   Trying 140.82.113.4:443...
+18:19:55.666618 http.c:678              == Info: Connected to github.com (140.82.113.4) port 443 (#0)
+18:19:55.666861 http.c:678              == Info: ALPN: offers http/1.1
+18:19:55.675485 http.c:678              == Info:  CAfile: /etc/ssl/cert.pem
+18:19:55.675511 http.c:678              == Info:  CApath: none
+18:19:55.675826 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (OUT), TLS handshake, Client hello (1):
+18:19:55.807798 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (IN), TLS handshake, Server hello (2):
+18:19:55.808136 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (IN), TLS handshake, Unknown (8):
+18:19:55.808836 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (IN), TLS handshake, Certificate (11):
+18:19:55.812818 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (IN), TLS handshake, CERT verify (15):
+18:19:55.813168 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (IN), TLS handshake, Finished (20):
+18:19:55.813343 http.c:678              == Info: [CONN-0-0][CF-SSL] (304) (OUT), TLS handshake, Finished (20):
+18:19:55.813374 http.c:678              == Info: SSL connection using TLSv1.3 / AEAD-AES128-GCM-SHA256
+18:19:55.813386 http.c:678              == Info: ALPN: server accepted http/1.1
+18:19:55.813400 http.c:678              == Info: Server certificate:
+18:19:55.813416 http.c:678              == Info:  subject: CN=github.com
+18:19:55.813429 http.c:678              == Info:  start date: Jul  3 00:00:00 2026 GMT
+18:19:55.813440 http.c:678              == Info:  expire date: Sep 30 23:59:59 2026 GMT
+18:19:55.813460 http.c:678              == Info:  subjectAltName: host "github.com" matched cert's "github.com"
+18:19:55.813479 http.c:678              == Info:  issuer: C=GB; O=Sectigo Limited; CN=Sectigo Public Server Authentication CA DV E36
+18:19:55.813489 http.c:678              == Info:  SSL certificate verify ok.
+18:19:55.813570 http.c:625              => Send header, 0000000204 bytes (0x000000cc)
+18:19:55.813592 http.c:637              => Send header: GET /dusty-saxton/interceptor.git/info/refs?service=git-receive-pack HTTP/1.1
+18:19:55.813602 http.c:637              => Send header: Host: github.com
+18:19:55.813612 http.c:637              => Send header: User-Agent: git/2.37.1 (Apple Git-137.1)
+18:19:55.813621 http.c:637              => Send header: Accept: */*
+18:19:55.813630 http.c:637              => Send header: Accept-Encoding: deflate, gzip
+18:19:55.813639 http.c:637              => Send header: Pragma: no-cache
+18:19:55.813647 http.c:637              => Send header:
+18:19:55.920626 http.c:678              == Info: Mark bundle as not supporting multiuse
+18:19:55.920691 http.c:625              <= Recv header, 0000000027 bytes (0x0000001b)
+18:19:55.920707 http.c:637              <= Recv header: HTTP/1.1 401 Unauthorized
+18:19:55.920720 http.c:625              <= Recv header, 0000000026 bytes (0x0000001a)
+18:19:55.920732 http.c:637              <= Recv header: Server: GitHub-Babel/3.0
+18:19:55.920746 http.c:625              <= Recv header, 0000000054 bytes (0x00000036)
+18:19:55.920757 http.c:637              <= Recv header: Content-Security-Policy: default-src 'none'; sandbox
+18:19:55.920770 http.c:625              <= Recv header, 0000000041 bytes (0x00000029)
+18:19:55.920782 http.c:637              <= Recv header: Content-Type: text/plain; charset=UTF-8
+18:19:55.920794 http.c:625              <= Recv header, 0000000040 bytes (0x00000028)
+18:19:55.920806 http.c:637              <= Recv header: www-authenticate: Basic realm="GitHub"
+18:19:55.920817 http.c:625              <= Recv header, 0000000020 bytes (0x00000014)
+18:19:55.920828 http.c:637              <= Recv header: Content-Length: 26
+18:19:55.920840 http.c:625              <= Recv header, 0000000037 bytes (0x00000025)
+18:19:55.920851 http.c:637              <= Recv header: Date: Wed, 22 Jul 2026 23:19:56 GMT
+18:19:55.920884 http.c:625              <= Recv header, 0000000056 bytes (0x00000038)
+18:19:55.920893 http.c:637              <= Recv header: X-GitHub-Request-Id: D1B3:4F65B:3E0619:52A233:6A61501B
+18:19:55.920900 http.c:625              <= Recv header, 0000000023 bytes (0x00000017)
+18:19:55.920907 http.c:637              <= Recv header: X-Frame-Options: DENY
+18:19:55.920915 http.c:625              <= Recv header, 0000000073 bytes (0x00000049)
+18:19:55.920923 http.c:637              <= Recv header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+18:19:55.920931 http.c:625              <= Recv header, 0000000002 bytes (0x00000002)
+18:19:55.920938 http.c:637              <= Recv header:
+18:19:55.920967 http.c:678              == Info: Connection #0 to host github.com left intact
+18:19:55.956939 http.c:678              == Info: Found bundle for host: 0x6000005cc300 [serially]
+18:19:55.956986 http.c:678              == Info: Re-using existing connection #0 with host github.com
+18:19:55.957004 http.c:678              == Info: Server auth using Basic with user 'dusty-saxton'
+18:19:55.957160 http.c:625              => Send header, 0000000299 bytes (0x0000012b)
+18:19:55.957175 http.c:637              => Send header: GET /dusty-saxton/interceptor.git/info/refs?service=git-receive-pack HTTP/1.1
+18:19:55.957181 http.c:637              => Send header: Host: github.com
+18:19:55.957186 http.c:637              => Send header: Authorization: Basic <redacted>
+18:19:55.957190 http.c:637              => Send header: User-Agent: git/2.37.1 (Apple Git-137.1)
+18:19:55.957195 http.c:637              => Send header: Accept: */*
+18:19:55.957199 http.c:637              => Send header: Accept-Encoding: deflate, gzip
+18:19:55.957203 http.c:637              => Send header: Pragma: no-cache
+18:19:55.957207 http.c:637              => Send header:
+18:19:56.155045 http.c:678              == Info: Mark bundle as not supporting multiuse
+18:19:56.155140 http.c:625              <= Recv header, 0000000017 bytes (0x00000011)
+18:19:56.155168 http.c:637              <= Recv header: HTTP/1.1 200 OK
+18:19:56.155188 http.c:625              <= Recv header, 0000000026 bytes (0x0000001a)
+18:19:56.155203 http.c:637              <= Recv header: Server: GitHub-Babel/3.0
+18:19:56.155225 http.c:625              <= Recv header, 0000000060 bytes (0x0000003c)
+18:19:56.155241 http.c:637              <= Recv header: Content-Type: application/x-git-receive-pack-advertisement
+18:19:56.155257 http.c:625              <= Recv header, 0000000054 bytes (0x00000036)
+18:19:56.155272 http.c:637              <= Recv header: Content-Security-Policy: default-src 'none'; sandbox
+18:19:56.155287 http.c:625              <= Recv header, 0000000040 bytes (0x00000028)
+18:19:56.155305 http.c:637              <= Recv header: expires: Fri, 01 Jan 1980 00:00:00 GMT
+18:19:56.155321 http.c:625              <= Recv header, 0000000018 bytes (0x00000012)
+18:19:56.155335 http.c:637              <= Recv header: pragma: no-cache
+18:19:56.155350 http.c:625              <= Recv header, 0000000053 bytes (0x00000035)
+18:19:56.155364 http.c:637              <= Recv header: Cache-Control: no-cache, max-age=0, must-revalidate
+18:19:56.155379 http.c:625              <= Recv header, 0000000023 bytes (0x00000017)
+18:19:56.155393 http.c:637              <= Recv header: Vary: Accept-Encoding
+18:19:56.155409 http.c:625              <= Recv header, 0000000028 bytes (0x0000001c)
+18:19:56.155424 http.c:637              <= Recv header: Transfer-Encoding: chunked
+18:19:56.155439 http.c:625              <= Recv header, 0000000037 bytes (0x00000025)
+18:19:56.155453 http.c:637              <= Recv header: Date: Wed, 22 Jul 2026 23:19:56 GMT
+18:19:56.155468 http.c:625              <= Recv header, 0000000056 bytes (0x00000038)
+18:19:56.155482 http.c:637              <= Recv header: X-GitHub-Request-Id: D1B3:4F65B:3E069A:52A2E1:6A61501C
+18:19:56.155497 http.c:625              <= Recv header, 0000000023 bytes (0x00000017)
+18:19:56.155510 http.c:637              <= Recv header: X-Frame-Options: DENY
+18:19:56.155525 http.c:625              <= Recv header, 0000000073 bytes (0x00000049)
+18:19:56.155590 http.c:637              <= Recv header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+18:19:56.155610 http.c:625              <= Recv header, 0000000002 bytes (0x00000002)
+18:19:56.155625 http.c:637              <= Recv header:
+18:19:56.155755 http.c:678              == Info: Connection #0 to host github.com left intact
+18:19:59.403729 http.c:678              == Info: Found bundle for host: 0x6000005cc300 [serially]
+18:19:59.403784 http.c:678              == Info: Re-using existing connection #0 with host github.com
+18:19:59.403799 http.c:678              == Info: Server auth using Basic with user 'dusty-saxton'
+18:19:59.403977 http.c:625              => Send header, 0000000378 bytes (0x0000017a)
+18:19:59.403992 http.c:637              => Send header: POST /dusty-saxton/interceptor.git/git-receive-pack HTTP/1.1
+18:19:59.403998 http.c:637              => Send header: Host: github.com
+18:19:59.404003 http.c:637              => Send header: Authorization: Basic <redacted>
+18:19:59.404008 http.c:637              => Send header: User-Agent: git/2.37.1 (Apple Git-137.1)
+18:19:59.404012 http.c:637              => Send header: Accept-Encoding: deflate, gzip
+18:19:59.404018 http.c:637              => Send header: Content-Type: application/x-git-receive-pack-request
+18:19:59.404023 http.c:637              => Send header: Accept: application/x-git-receive-pack-result
+18:19:59.404027 http.c:637              => Send header: Content-Length: 27250894
+18:19:59.404031 http.c:637              => Send header:
+18:21:31.429687 http.c:678              == Info: Mark bundle as not supporting multiuse
+18:21:31.430518 http.c:625              <= Recv header, 0000000030 bytes (0x0000001e)
+18:21:31.430560 http.c:637              <= Recv header: HTTP/1.1 408 Request Timeout
+18:21:31.430573 http.c:625              <= Recv header, 0000000026 bytes (0x0000001a)
+18:21:31.430581 http.c:637              <= Recv header: Server: GitHub-Babel/3.0
+18:21:31.430591 http.c:625              <= Recv header, 0000000054 bytes (0x00000036)
+18:21:31.430602 http.c:637              <= Recv header: Content-Security-Policy: default-src 'none'; sandbox
+18:21:31.430611 http.c:625              <= Recv header, 0000000041 bytes (0x00000029)
+18:21:31.430620 http.c:637              <= Recv header: Content-Type: text/plain; charset=UTF-8
+18:21:31.430629 http.c:625              <= Recv header, 0000000019 bytes (0x00000013)
+18:21:31.430637 http.c:637              <= Recv header: Content-Length: 0
+18:21:31.430646 http.c:625              <= Recv header, 0000000037 bytes (0x00000025)
+18:21:31.430654 http.c:637              <= Recv header: Date: Wed, 22 Jul 2026 23:21:31 GMT
+18:21:31.430662 http.c:625              <= Recv header, 0000000056 bytes (0x00000038)
+18:21:31.430670 http.c:637              <= Recv header: X-GitHub-Request-Id: D1B3:4F65B:3E144E:52B4C1:6A61501C
+18:21:31.430679 http.c:625              <= Recv header, 0000000023 bytes (0x00000017)
+18:21:31.430687 http.c:637              <= Recv header: X-Frame-Options: DENY
+18:21:31.430695 http.c:625              <= Recv header, 0000000073 bytes (0x00000049)
+18:21:31.430705 http.c:637              <= Recv header: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+18:21:31.430716 http.c:678              == Info: HTTP error before end of send, stop sending
+18:21:31.430725 http.c:625              <= Recv header, 0000000002 bytes (0x00000002)
+18:21:31.430733 http.c:637              <= Recv header:
+18:21:31.430786 http.c:678              == Info: Closing connection 0
+error: RPC failed; HTTP 408 curl 22 The requested URL returned error: 408
+send-pack: unexpected disconnect while reading sideband packet
+fatal: the remote end hung up unexpectedly
+Everything up-to-date
