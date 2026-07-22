@@ -102,6 +102,7 @@ OBJS += driver/keyboard.o
 OBJS += driver/spi.o
 OBJS += driver/st7565.o
 OBJS += driver/system.o
+OBJS += syscalls.o
 OBJS += driver/systick.o
 ifeq ($(ENABLE_UART),1)
 	OBJS += driver/uart.o
