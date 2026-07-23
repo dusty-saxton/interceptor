@@ -17,6 +17,7 @@ bool     gSniffingEnabled = false;
 bool     gInterceptorViewActive = false;
 uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving audio
 uint8_t  gInterceptorMeterPercent = 0;    // 0-100, how full the sweep meter should be
+bool     gInterceptorTxOverrideActive = false; // true while transmitting on a grid channel via PTT override
 
 // RSSI threshold used as a base activity gate for the grid-check cycle
 // (checking already-saved channels). NOTE: 70 is a starting guess - adjust
@@ -158,7 +159,19 @@ void INTERCEPTOR_TimeSlice10ms(void) {
     // throttled rate (not every single main-loop tick, which would hammer
     // the screen far more than needed) so the sweep visibly animates with
     // the live signal level.
-    if (gInterceptorActiveFrequency != 0) {
+    if (gInterceptorActiveFrequency != 0 || gInterceptorTxOverrideActive) {
+        if (gInterceptorTxOverrideActive) {
+            // TX: sample live mic/modulation level instead of RX RSSI.
+            // Simple linear scaling - this firmware's own real mic-bar
+            // feature (ui/main.c) uses a non-linear sqrt curve for better
+            // low-volume sensitivity, but that helper isn't exposed
+            // anywhere we can reuse it from, so this is a simpler
+            // approximation using the same underlying real function.
+            uint16_t amp = BK4819_GetVoiceAmplitudeOut();
+            uint32_t pct = ((uint32_t)amp * 100) / 65535;
+            gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
+        }
+
         if (sMeterRedrawCountdown > 0) {
             sMeterRedrawCountdown--;
         } else {

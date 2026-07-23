@@ -13,6 +13,7 @@ extern char    gInterceptorNameBuf[7];
 extern bool    gInterceptorEnteringChannel;
 extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
+extern bool     gInterceptorTxOverrideActive;
 
 // gFrameBuffer is FRAME_LINES (7) pages tall, each page = 8 pixels, indexed
 // directly (confirmed against the real UI_PrintString implementation in
@@ -130,7 +131,8 @@ void UI_DisplayInterceptorGridPage(void)
 
             UI_PrintString(box_out, x, xEnd, page, 7);
 
-            if (gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency) {
+            if ((gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency)
+                || (gInterceptorTxOverrideActive && i == gInterceptorHighlight)) {
                 UI_DrawMeterSweep(page, x, xEnd);
             }
         }

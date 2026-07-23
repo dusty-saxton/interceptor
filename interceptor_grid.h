@@ -27,5 +27,6 @@ extern bool     gSniffingEnabled;       // true = hunt+grid-check alternation; f
 extern bool     gInterceptorViewActive; // true = grid screen is what's currently shown
 extern uint32_t gInterceptorActiveFrequency; // 0 = nothing currently receiving audio
 extern uint8_t  gInterceptorMeterPercent;    // 0-100, current sweep meter fill level
+extern bool     gInterceptorTxOverrideActive; // true while transmitting on a grid channel via PTT override
 
 #endif

@@ -38,6 +38,8 @@ static void Begin_Interceptor_PTT(void)
     uint16_t idx = CurrentSlotIndex();
     if (gScanList[idx].Frequency == 0) return; // nothing to transmit on
 
+    gInterceptorTxOverrideActive = true;
+
     // transmitting takes priority over background intercepting - stops it
     // outright rather than just pausing for the TX moment, since resuming
     // is a deliberate action (F+7) rather than automatic
@@ -73,6 +75,7 @@ static void Begin_Interceptor_PTT(void)
 
 static void End_Interceptor_PTT(void)
 {
+    gInterceptorTxOverrideActive = false;
     GENERIC_Key_PTT(false); // reuse the real, existing PTT-release/end-of-TX path
 
     if (sSavedTxVfo != NULL) {
