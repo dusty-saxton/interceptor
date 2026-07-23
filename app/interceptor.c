@@ -241,25 +241,31 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         return;
     }
 
-    // STAR now requires a genuine long-press-then-release to delete a slot
-    // (and blacklist it, if it wasn't a manually-added one) - a single tap
-    // used to delete instantly with no confirmation, which was too easy to
-    // trigger by accident while just navigating.
-    if (Key == KEY_STAR) {
-        if (!bKeyPressed && bKeyHeld) {
-            uint16_t idx = CurrentSlotIndex();
-            INTERCEPTOR_DeleteAndBlacklist(idx);
-            gUpdateDisplay = true;
+    // Long-press UP/DOWN changes pages. This was previously completely
+    // missing - short-press UP/DOWN was already used for moving the cursor
+    // within a page, but nothing at all navigated between pages, so any
+    // slot past the first 9 was genuinely unreachable.
+    if ((Key == KEY_UP || Key == KEY_DOWN) && bKeyHeld) {
+        if (!bKeyPressed) {
+            uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
+            if (totalPages > 1) {
+                int8_t next = (int8_t)gCurrentGridPage + (Key == KEY_UP ? -1 : 1);
+                if (next < 0) next = totalPages - 1;
+                if (next >= totalPages) next = 0;
+                gCurrentGridPage = (uint8_t)next;
+                gInterceptorHighlight = 0;
+                gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+                gUpdateDisplay = true;
+            }
         }
         return;
     }
 
-    // EXIT: short press leaves the grid screen as normal; a long press
-    // instead clears the entire blacklist (an escape hatch, since there was
-    // previously no way to ever see or undo what's been blacklisted). Only
-    // applies during normal navigation - naming and channel-entry mode
-    // still handle their own EXIT below, unaffected by this.
-    if (Key == KEY_EXIT && !gInterceptorEnteringChannel && gInterceptorNameEditIndex < 0) {
+    // STAR: short press deletes the selected slot (and blacklists it, if it
+    // wasn't a manually-added one); long press instead clears the entire
+    // blacklist. No confirmation on the short-press delete - a stray tap on
+    // STAR while navigating will delete instantly, by deliberate choice.
+    if (Key == KEY_STAR) {
         if (!bKeyPressed) {
             if (bKeyHeld) {
                 gLockoutCount = 0;
@@ -267,9 +273,20 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                 gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
                 gUpdateDisplay = true;
             } else {
-                gInterceptorViewActive = false;
-                gRequestDisplayScreen  = DISPLAY_MAIN;
+                uint16_t idx = CurrentSlotIndex();
+                INTERCEPTOR_DeleteAndBlacklist(idx);
+                gUpdateDisplay = true;
             }
+        }
+        return;
+    }
+
+    // EXIT: leaves the grid screen, short press only - naming and
+    // channel-entry mode still handle their own EXIT below, unaffected.
+    if (Key == KEY_EXIT && !gInterceptorEnteringChannel && gInterceptorNameEditIndex < 0) {
+        if (!bKeyPressed && !bKeyHeld) {
+            gInterceptorViewActive = false;
+            gRequestDisplayScreen  = DISPLAY_MAIN;
         }
         return;
     }

@@ -77,12 +77,13 @@ void UI_DisplayInterceptorGridPage(void)
     // look wrong). The page indicator is deliberately just the current page
     // number (no "total pages", no slash) to leave room for the full mode word.
     char status_str[24];
+    uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
 
     if (gInterceptorBandSweepActive) {
-        sprintf(status_str, "SCAN ON P%u", gCurrentGridPage + 1);
+        sprintf(status_str, "SCAN ON P%u/%u", gCurrentGridPage + 1, totalPages);
     } else {
-        sprintf(status_str, gSniffingEnabled ? "INTERCEPT ON P%u" : "INTERCEPT OFF P%u",
-                gCurrentGridPage + 1);
+        sprintf(status_str, gSniffingEnabled ? "INT ON P%u/%u" : "INT OFF P%u/%u",
+                gCurrentGridPage + 1, totalPages);
     }
     UI_PrintStringSmallNormal(status_str, 2, 127, STATUS_LINE);
 

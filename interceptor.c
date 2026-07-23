@@ -77,9 +77,23 @@ void INTERCEPTOR_SortByPopularity(void) {
     }
 }
 
+// How close two frequencies need to be to count as "the same channel" for
+// duplicate detection. Measurement jitter can round the same real signal
+// to a slightly different value from one detection to the next - without
+// this tolerance, that jitter looks like a brand-new frequency every time.
+// 10000 = 100kHz in this firmware's 10Hz-per-count units - a starting
+// guess, not hardware-calibrated.
+#define FREQ_DEDUP_TOLERANCE  10000
+
+static uint16_t sLastEvictedSlot = 0xFFFF;
+
 void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
-    for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++)
-        if (gScanList[i].Frequency == freq) return; // already have it
+    for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+        uint32_t existing = gScanList[i].Frequency;
+        if (existing == 0) continue;
+        uint32_t delta = (existing > freq) ? (existing - freq) : (freq - existing);
+        if (delta <= FREQ_DEDUP_TOLERANCE) return; // close enough to count as already-have-it
+    }
 
     uint16_t target = 0xFFFF;
     for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
@@ -88,14 +102,26 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
     if (target == 0xFFFF) {
         uint8_t lowest_hits = 255;
         for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
-            if (!gScanList[i].IsLocked && gScanList[i].HitCount < lowest_hits) {
+            if (gScanList[i].IsLocked) continue;
+            if (gScanList[i].HitCount < lowest_hits) {
                 lowest_hits = gScanList[i].HitCount;
                 target = i;
+            }
+        }
+        // If the lowest-hit-count slot is the exact same one evicted last
+        // time, and something else ties with it, prefer the other one -
+        // otherwise a run of near-simultaneous new detections can keep
+        // thrashing the same slot over and over instead of spreading out.
+        if (target == sLastEvictedSlot) {
+            for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+                if (gScanList[i].IsLocked || i == sLastEvictedSlot) continue;
+                if (gScanList[i].HitCount == lowest_hits) { target = i; break; }
             }
         }
         if (target == 0xFFFF) return; // every slot is locked, nothing to evict
     }
 
+    sLastEvictedSlot = target;
     memset(&gScanList[target], 0, sizeof(InterceptorChannel_t));
     gScanList[target].Frequency = freq;
     gScanList[target].CodeType  = codeType;
@@ -415,6 +441,14 @@ static void Do_BandSweep_Cycle(void) {
     static uint32_t sSweepFreq = SWEEP_VHF_START;
     static bool     sSweepInVhf = true;
 
+    // If we're currently dwelling on something the sweep found, stay tuned
+    // and keep listening rather than immediately hopping to the next step -
+    // otherwise nothing found by the sweep could ever actually be heard.
+    if (gInterceptorActiveFrequency != 0) {
+        Handle_Active_Channel_Dwell();
+        return;
+    }
+
     BK4819_SetFrequency(sSweepFreq);
     SYSTEM_DelayMs(5); // brief settle - PLL needs some lock time after retuning
 
@@ -423,8 +457,12 @@ static void Do_BandSweep_Cycle(void) {
         for (uint8_t i = 0; i < gLockoutCount; i++)
             if (gLockoutList[i] == sSweepFreq) { blacklisted = true; break; }
 
-        if (!blacklisted)
+        if (!blacklisted) {
             INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
+            gInterceptorActiveFrequency = sSweepFreq; // stay here and actually listen
+            gUpdateDisplay = true;
+            return; // don't advance the sweep frequency yet - we're dwelling now
+        }
     }
 
     sSweepFreq += SWEEP_STEP_SIZE;
