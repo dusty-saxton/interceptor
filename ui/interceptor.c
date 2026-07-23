@@ -14,6 +14,7 @@ extern bool    gInterceptorEnteringChannel;
 extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
 extern bool     gInterceptorTxOverrideActive;
+extern bool     gInterceptorBandSweepActive;
 
 // gFrameBuffer is FRAME_LINES (7) pages tall, each page = 8 pixels, indexed
 // directly (confirmed against the real UI_PrintString implementation in
@@ -70,14 +71,22 @@ void UI_DisplayInterceptorGridPage(void)
     memset(gFrameBuffer, 0, sizeof(gFrameBuffer));
 
     // --- Status bar: small font so the grid rows below have room to be big ---
+    // NOTE: this line has ~125px of real usable width at 7px/char - max 17
+    // characters is the hard safe limit (confirmed the hard way earlier: going
+    // over this causes a position calculation to wrap/corrupt memory, not just
+    // look wrong). The page indicator is deliberately just the current page
+    // number (no "total pages", no slash) to leave room for the full mode word.
     char status_str[24];
-    uint8_t total_pages = INTERCEPTOR_GetUsedPageCount();
 
-    sprintf(status_str, gSniffingEnabled ? "INT ON  P:%u/%u" : "INT OFF P:%u/%u",
-            gCurrentGridPage + 1, total_pages);
+    if (gInterceptorBandSweepActive) {
+        sprintf(status_str, "SCAN ON P%u", gCurrentGridPage + 1);
+    } else {
+        sprintf(status_str, gSniffingEnabled ? "INTERCEPT ON P%u" : "INTERCEPT OFF P%u",
+                gCurrentGridPage + 1);
+    }
     UI_PrintStringSmallNormal(status_str, 2, 127, STATUS_LINE);
 
-    if (gSniffingEnabled) {
+    if (gSniffingEnabled || gInterceptorBandSweepActive) {
         for (uint8_t col = 0; col < LCD_WIDTH; col++)
             gFrameBuffer[STATUS_LINE][col] ^= 0xFF;
     }
