@@ -57,10 +57,10 @@ void GENERIC_Key_F(bool bKeyPressed, bool bKeyHeld)
 		}
 		else { // released
 #ifdef ENABLE_FMRADIO
-			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM)
+			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM && gScreenToDisplay != DISPLAY_INTERCEPTOR)
 				return;
 #else
-			if (gScreenToDisplay != DISPLAY_MAIN)
+			if (gScreenToDisplay != DISPLAY_MAIN && gScreenToDisplay != DISPLAY_INTERCEPTOR)
 				return;
 #endif
 
@@ -145,14 +145,11 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 
 
 #ifdef ENABLE_FMRADIO
-	if (gFM_ScanState != FM_SCAN_OFF) { // FM radio is scanning .. stop
-		FM_PlayAndUpdate();
-#ifdef ENABLE_VOICE
-		gAnotherVoiceID = VOICE_ID_SCANNING_STOP;
-#endif
-		gRequestDisplayScreen = DISPLAY_FM;
-		goto cancel_tx;
-	}
+			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+				return;
+#else
+			if (gScreenToDisplay != DISPLAY_MAIN && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+				return;
 #endif
 
 #ifdef ENABLE_FMRADIO
