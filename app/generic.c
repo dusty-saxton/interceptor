@@ -36,6 +36,7 @@
 #include "settings.h"
 #include "ui/inputbox.h"
 #include "ui/ui.h"
+#include "interceptor.h"
 
 void GENERIC_Key_F(bool bKeyPressed, bool bKeyHeld)
 {
@@ -122,7 +123,7 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 #endif
 			RADIO_SetVfoState(VFO_STATE_NORMAL);
 
-			if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)     // 1of11 .. don't close the menu
+			if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)
 				gRequestDisplayScreen = DISPLAY_MAIN;
 		}
 
@@ -145,11 +146,14 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 
 
 #ifdef ENABLE_FMRADIO
-			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM && gScreenToDisplay != DISPLAY_INTERCEPTOR)
-				return;
-#else
-			if (gScreenToDisplay != DISPLAY_MAIN && gScreenToDisplay != DISPLAY_INTERCEPTOR)
-				return;
+	if (gFM_ScanState != FM_SCAN_OFF) { // FM radio is scanning .. stop
+		FM_PlayAndUpdate();
+#ifdef ENABLE_VOICE
+		gAnotherVoiceID = VOICE_ID_SCANNING_STOP;
+#endif
+		gRequestDisplayScreen = DISPLAY_FM;
+		goto cancel_tx;
+	}
 #endif
 
 #ifdef ENABLE_FMRADIO
@@ -162,7 +166,7 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 		return;
 	}
 
-	if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)    // 1of11 .. don't close the menu
+	if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)
 		gRequestDisplayScreen = DISPLAY_MAIN;
 
 

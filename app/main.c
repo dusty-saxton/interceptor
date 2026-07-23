@@ -25,7 +25,6 @@
 #endif
 #include "app/generic.h"
 #include "app/main.h"
-#include "interceptor.h"
 #include "app/scanner.h"
 
 #ifdef ENABLE_SPECTRUM
@@ -42,6 +41,7 @@
 #include "settings.h"
 #include "ui/inputbox.h"
 #include "ui/ui.h"
+#include "interceptor.h"
 #include <stdlib.h>
 
 void toggle_chan_scanlist(void)
@@ -191,22 +191,10 @@ static void processFKeyFunction(const KEY_Code_t Key, const bool beep)
 
 		case KEY_5:
 			if(beep) {
-#ifdef ENABLE_NOAA
-				if (!IS_NOAA_CHANNEL(gTxVfo->CHANNEL_SAVE)) {
-					gEeprom.ScreenChannel[Vfo] = gEeprom.NoaaChannel[gEeprom.TX_VFO];
-				}
-				else {
-					gEeprom.ScreenChannel[Vfo] = gEeprom.FreqChannel[gEeprom.TX_VFO];
-#ifdef ENABLE_VOICE
-						gAnotherVoiceID = VOICE_ID_FREQUENCY_MODE;
-#endif
-				}
-				gRequestSaveVFO   = true;
-				gVfoConfigureMode = VFO_CONFIGURE_RELOAD;
-#elif defined(ENABLE_SPECTRUM)
-				APP_RunSpectrum();
-				gRequestDisplayScreen = DISPLAY_MAIN;
-#endif
+				gSniffingEnabled = false; // mutually exclusive with regular sniffing
+				gInterceptorBandSweepActive = !gInterceptorBandSweepActive;
+				gInterceptorViewActive = true;
+				gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
 			}
 			else {
 #ifdef ENABLE_VOX
@@ -223,6 +211,8 @@ static void processFKeyFunction(const KEY_Code_t Key, const bool beep)
 		case KEY_7:
 			gWasFKeyPressed = false;
 			gUpdateStatus   = true;
+
+			gInterceptorBandSweepActive = false; // mutually exclusive with band sweep
 
 			if (beep) {
 				// short press: toggle sniffing on/off

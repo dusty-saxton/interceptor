@@ -33,6 +33,7 @@
 #include "ui/helper.h"
 #include "ui/ui.h"
 #include "ui/status.h"
+#include "interceptor.h"
 
 void UI_DisplayStatus()
 {
@@ -92,6 +93,14 @@ void UI_DisplayStatus()
 				s = "S";
 			}
 			UI_PrintStringSmallBufferNormal(s, line + x + 1);
+			x1 = x + 10;
+		}
+		else if (gScreenToDisplay == DISPLAY_INTERCEPTOR) {
+			// Grid mode's own scanning - a separate, safe indicator using
+			// our own screen state, not the real scanner's gScanStateDir
+			// (touching that directly risks arming CHFRSCANNER's own
+			// auto-continuation logic with uninitialized state).
+			UI_PrintStringSmallBufferNormal("S", line + x + 1);
 			x1 = x + 10;
 		}
 	}

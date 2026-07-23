@@ -25,7 +25,6 @@
 	#include "app/aircopy.h"
 #endif
 #include "app/app.h"
-#include "interceptor.h"
 #include "app/chFrScanner.h"
 #include "app/dtmf.h"
 #ifdef ENABLE_FLASHLIGHT
@@ -72,6 +71,7 @@
 #include "ui/menu.h"
 #include "ui/status.h"
 #include "ui/ui.h"
+#include "interceptor.h"
 
 static bool flagSaveVfo;
 static bool flagSaveSettings;
@@ -92,7 +92,7 @@ void (*ProcessKeysFunctions[])(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) 
 #ifdef ENABLE_AIRCOPY
 	[DISPLAY_AIRCOPY] = &AIRCOPY_ProcessKeys,
 #endif
-[DISPLAY_INTERCEPTOR] = &INTERCEPTOR_ProcessKeys,
+	[DISPLAY_INTERCEPTOR] = &INTERCEPTOR_ProcessKeys,
 };
 
 static_assert(ARRAY_SIZE(ProcessKeysFunctions) == DISPLAY_N_ELEM);

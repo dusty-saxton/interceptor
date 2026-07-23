@@ -35,8 +35,8 @@
 #include "ui/menu.h"
 #include "ui/scanner.h"
 #include "ui/ui.h"
-#include "interceptor.h"
 #include "../misc.h"
+#include "interceptor.h"
 
 GUI_DisplayType_t gScreenToDisplay;
 GUI_DisplayType_t gRequestDisplayScreen = DISPLAY_INVALID;
@@ -58,7 +58,7 @@ void (*UI_DisplayFunctions[])(void) = {
 #ifdef ENABLE_AIRCOPY
 	[DISPLAY_AIRCOPY] = &UI_DisplayAircopy,
 #endif
-[DISPLAY_INTERCEPTOR] = &UI_DisplayInterceptorGridPage,
+	[DISPLAY_INTERCEPTOR] = &UI_DisplayInterceptorGridPage,
 };
 
 static_assert(ARRAY_SIZE(UI_DisplayFunctions) == DISPLAY_N_ELEM);

@@ -1,4 +1,3 @@
-
 # compile options (see README.md for descriptions)
 # 0 = disable
 # 1 = enable
@@ -35,7 +34,7 @@ ENABLE_FASTER_CHANNEL_SCAN    ?= 1
 ENABLE_RSSI_BAR               ?= 1
 ENABLE_AUDIO_BAR              ?= 1
 ENABLE_COPY_CHAN_TO_VFO       ?= 1
-ENABLE_SPECTRUM               ?= 1
+ENABLE_SPECTRUM               ?= 0
 ENABLE_REDUCE_LOW_MID_TX_POWER?= 0
 ENABLE_BYP_RAW_DEMODULATORS   ?= 0
 ENABLE_BLMIN_TMP_OFF          ?= 0
@@ -102,7 +101,6 @@ OBJS += driver/keyboard.o
 OBJS += driver/spi.o
 OBJS += driver/st7565.o
 OBJS += driver/system.o
-OBJS += syscalls.o
 OBJS += driver/systick.o
 ifeq ($(ENABLE_UART),1)
 	OBJS += driver/uart.o
@@ -127,6 +125,7 @@ OBJS += app/generic.o
 OBJS += interceptor.o
 OBJS += ui/interceptor.o
 OBJS += app/interceptor.o
+OBJS += syscalls.o
 OBJS += app/main.o
 OBJS += app/menu.o
 ifeq ($(ENABLE_SPECTRUM), 1)
@@ -255,7 +254,7 @@ CFLAGS += -Wextra
 CFLAGS += -DPRINTF_INCLUDE_CONFIG_H
 CFLAGS += -DAUTHOR_STRING=\"$(AUTHOR_STRING)\" -DVERSION_STRING=\"$(VERSION_STRING)\"
 
-ifeq ($(ENABLE_SPECTRUM),0)
+ifeq ($(ENABLE_SPECTRUM),1)
 CFLAGS += -DENABLE_SPECTRUM
 endif
 ifeq ($(ENABLE_SWD),1)
