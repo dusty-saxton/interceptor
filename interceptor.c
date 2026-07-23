@@ -199,7 +199,7 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             // much lower than a sharp transient, which is exactly why only
             // a fingernail tap was registering before. Borrowing that same
             // real gain factor rather than guessing a new one.
-            uint32_t boosted = (uint32_t)amp * 8;
+            uint32_t boosted = (uint32_t)amp * 32;
             if (boosted > 65535) boosted = 65535;
             uint32_t pct = (boosted * 100) / 65535;
             gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
