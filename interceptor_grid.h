@@ -30,4 +30,18 @@ extern uint8_t  gInterceptorMeterPercent;    // 0-100, current sweep meter fill 
 extern bool     gInterceptorTxOverrideActive; // true while transmitting on a grid channel via PTT override
 extern bool     gInterceptorBandSweepActive;  // true while the F+5 VHF/UHF band sweep is running
 
+// Live "scanning" ticker - shows the frequency currently being evaluated
+// by hunt's frequency counter, displayed in the next empty grid cell.
+extern bool     gInterceptorHuntTickerActive;
+extern uint32_t gInterceptorHuntTickerFreq;
+
+// Brief flash on the cell a new capture just landed in, before it settles
+// into its normal display.
+extern int8_t   gInterceptorFlashSlot;   // -1 = nothing currently flashing
+extern uint8_t  gInterceptorFlashCount;  // remaining flash toggles
+
+// Currently-being-checked cell, for grid-check and fast-scan - inverts
+// briefly while a specific saved cell is actively being tested.
+extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
+
 #endif

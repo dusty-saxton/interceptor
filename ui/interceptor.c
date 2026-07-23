@@ -3,6 +3,7 @@
 #include "driver/st7565.h"
 #include "ui/helper.h"
 #include "ui/inputbox.h"
+#include "dcs.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -15,6 +16,11 @@ extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
 extern bool     gInterceptorTxOverrideActive;
 extern bool     gInterceptorBandSweepActive;
+extern bool     gInterceptorHuntTickerActive;
+extern uint32_t gInterceptorHuntTickerFreq;
+extern int8_t   gInterceptorFlashSlot;
+extern uint8_t  gInterceptorFlashCount;
+extern int16_t  gInterceptorCheckingSlot;
 
 // gFrameBuffer is FRAME_LINES (7) pages tall, each page = 8 pixels, indexed
 // directly (confirmed against the real UI_PrintString implementation in
@@ -95,6 +101,13 @@ void UI_DisplayInterceptorGridPage(void)
     // --- 9-cell grid: 3 rows x 3 columns, 2 pages tall per row (big font) ---
     uint16_t offset = gCurrentGridPage * GRID_PAGE_SIZE;
 
+    // Next empty slot overall (not just this page) - used to show the live
+    // hunt ticker in whichever cell a new capture would actually land in.
+    uint16_t nextEmptySlot = 0xFFFF;
+    for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+        if (gScanList[i].Frequency == 0) { nextEmptySlot = i; break; }
+    }
+
     for (uint8_t i = 0; i < GRID_PAGE_SIZE; i++) {
         uint16_t idx = offset + i;
         if (idx >= GRID_TOTAL_SLOTS) break;
@@ -126,8 +139,33 @@ void UI_DisplayInterceptorGridPage(void)
             continue;
         }
 
+        if (gScanList[idx].Frequency == 0 && idx == nextEmptySlot && gInterceptorHuntTickerActive) {
+            // Live scanning ticker - shows the frequency hunt is currently
+            // evaluating, right in the cell a new capture would land in.
+            uint32_t raw_f = gInterceptorHuntTickerFreq;
+            sprintf(box_out, "%3u.%02u",
+                    (unsigned int)(raw_f / 100000),
+                    (unsigned int)((raw_f % 100000) / 1000));
+            UI_PrintString(box_out, x, xEnd, page, 7);
+            continue;
+        }
+
         if (gScanList[idx].Frequency != 0) {
-            if (gScanList[idx].Name[0] != '\0') {
+            if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 3
+                && gScanList[idx].CodeType != CODE_TYPE_OFF) {
+                // Briefly show the discovered tone instead of the
+                // frequency/name, for the first half of the flash sequence
+                // only - settles to the normal display for the rest.
+                if (gScanList[idx].CodeType == CODE_TYPE_CONTINUOUS_TONE) {
+                    uint16_t tone = CTCSS_Options[gScanList[idx].Code];
+                    sprintf(box_out, "%u.%uHz", tone / 10, tone % 10);
+                } else {
+                    // DCS - normal vs inverted isn't tracked separately by
+                    // our capture, so this shows the bare code without a
+                    // N/I suffix rather than risk showing the wrong one.
+                    sprintf(box_out, "D%03o", DCS_Options[gScanList[idx].Code]);
+                }
+            } else if (gScanList[idx].Name[0] != '\0') {
                 strncpy(box_out, gScanList[idx].Name, 6);
                 box_out[6] = '\0';
             } else {
@@ -159,6 +197,25 @@ void UI_DisplayInterceptorGridPage(void)
                     uint8_t endX   = xEnd - inset;
                     for (uint8_t col = startX; col <= endX && col < LCD_WIDTH; col++)
                         gFrameBuffer[page + 1][col] ^= 0x40;
+                }
+            }
+
+            if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 0
+                && (gInterceptorFlashCount % 2) == 0) {
+                // brief full-cell invert flash on a just-saved capture,
+                // alternating on/off each redraw for a blinking effect
+                for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++) {
+                    if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
+                    if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
+                }
+            }
+
+            if (gInterceptorCheckingSlot >= 0 && idx == (uint16_t)gInterceptorCheckingSlot) {
+                // this saved cell is currently being tested by grid-check
+                // or fast-scan - full invert for the brief settle period
+                for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++) {
+                    if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
+                    if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
                 }
             }
         }

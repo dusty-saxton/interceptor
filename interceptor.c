@@ -23,6 +23,11 @@ uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving aud
 uint8_t  gInterceptorMeterPercent = 0;    // 0-100, how full the sweep meter should be
 bool     gInterceptorTxOverrideActive = false; // true while transmitting on a grid channel via PTT override
 bool     gInterceptorBandSweepActive = false;
+bool     gInterceptorHuntTickerActive = false;
+uint32_t gInterceptorHuntTickerFreq = 0;
+int8_t   gInterceptorFlashSlot = -1;
+uint8_t  gInterceptorFlashCount = 0;
+int16_t  gInterceptorCheckingSlot = -1; // -1 = nothing currently being checked
 
 // ---------------------------------------------------------------------
 // Checking a candidate frequency: this now properly repoints the REAL
@@ -49,6 +54,13 @@ static uint16_t sCandSettleCountdown = 0;
 
 static void Tune_RxVfo_To(uint32_t freq) {
     gRxVfo->freq_config_RX.Frequency = freq;
+    // Force narrow bandwidth specifically for our own checks - this wasn't
+    // being touched before, so every check inherited whatever bandwidth
+    // gRxVfo already had (often WIDE). A wide receive filter means tuning
+    // to any one of several closely-spaced saved channels can still pick
+    // up the same real signal, which is why different cells were lighting
+    // up inconsistently for what should be one consistent transmission.
+    gRxVfo->CHANNEL_BANDWIDTH = BK4819_FILTER_BW_NARROW;
     RADIO_ApplyOffset(gRxVfo);
     RADIO_ConfigureSquelchAndOutputPower(gRxVfo);
     RADIO_SetupRegisters(true);
@@ -171,6 +183,8 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
     gScanList[target].Frequency = freq;
     gScanList[target].CodeType  = codeType;
     gScanList[target].Code      = code;
+    gInterceptorFlashSlot  = (int8_t)target;
+    gInterceptorFlashCount = 6; // a few blink cycles before settling to normal display
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP); // always plays - not gated by the global beep setting
     gUpdateDisplay = true; // new capture won't show up on screen otherwise
 }
@@ -197,6 +211,17 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
+// Just clears the slot - no blacklist entry at all, even for auto-detected
+// channels. Distinct from INTERCEPTOR_DeleteAndBlacklist: this is for "get
+// rid of this quickly," that one is for "this is noise, never show it again."
+void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
+    if (slotIndex >= GRID_TOTAL_SLOTS) return;
+    if (gScanList[slotIndex].Frequency == 0) return; // nothing there
+
+    memset(&gScanList[slotIndex], 0, sizeof(InterceptorChannel_t));
+    AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
+}
+
 // ---------------------------------------------------------------------
 // Carrier-pause scan behavior: when a channel goes active, stay on it and
 // keep listening. When it goes quiet, don't resume scanning immediately -
@@ -209,10 +234,12 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
 
 #define REPLY_WAIT_10MS_TICKS  450  // ~4.5 seconds
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
+#define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
 
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
 static uint16_t sMeterRedrawCountdown = 0;
+static uint16_t sTickerRedrawCountdown = 0;
 
 // Called once per real 10ms system tick from APP_TimeSlice10ms().
 void INTERCEPTOR_TimeSlice10ms(void) {
@@ -243,11 +270,11 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             // approximation using the same underlying real function.
             uint16_t amp = BK4819_GetVoiceAmplitudeOut();
             // The real mic-bar feature (ui/main.c) multiplies this reading
-            // by 8 before doing anything else with it - normal speech reads
-            // much lower than a sharp transient, which is exactly why only
-            // a fingernail tap was registering before. Borrowing that same
-            // real gain factor rather than guessing a new one.
-            uint32_t boosted = (uint32_t)amp * 8;
+            // by 8, which is where this started - but that wasn't enough
+            // for normal speech on this radio in practice, so this has been
+            // bumped up further based on actual hardware testing (8 -> 32
+            // -> 64). Adjust further if still not sensitive enough.
+            uint32_t boosted = (uint32_t)amp * 64;
             if (boosted > 65535) boosted = 65535;
             uint32_t pct = (boosted * 100) / 65535;
             gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
@@ -271,6 +298,19 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             } else {
                 gUpdateDisplay = true;
             }
+        }
+    }
+
+    // Live hunt ticker and new-capture flash - both need periodic redraws
+    // to actually animate, same throttled-real-tick approach as the meter
+    // above, kept separate since neither of these cares about TX/RX level.
+    if (gInterceptorHuntTickerActive || gInterceptorFlashCount > 0) {
+        if (sTickerRedrawCountdown > 0) {
+            sTickerRedrawCountdown--;
+        } else {
+            sTickerRedrawCountdown = TICKER_REDRAW_10MS_TICKS;
+            if (gInterceptorFlashCount > 0) gInterceptorFlashCount--;
+            gUpdateDisplay = true;
         }
     }
 }
@@ -322,10 +362,18 @@ static void Hunt_Reset(void) {
     sHuntCssAttempts = 0;
     sHuntCssResultType = CODE_TYPE_OFF;
     sHuntCssResultCode = 0;
+    gInterceptorHuntTickerActive = false;
 }
 
 static void Do_Hunt_Cycle(void) {
     if (sHuntState == HUNT_IDLE) {
+        // This firmware's own real scanner always calls this before
+        // enabling the frequency counter - it selects the correct RF
+        // front-end filter path for whatever frequency range is currently
+        // in use. We were missing this entirely, which is the confirmed
+        // cause of harmonic/image frequency misdetection (e.g. capturing
+        // a transmitted frequency as roughly double its real value).
+        BK4819_PickRXFilterPathBasedOnFrequency(gRxVfo->pRX->Frequency);
         BK4819_EnableFrequencyScan();
         sHuntState = HUNT_FREQ;
         sHuntStableCount = 0;
@@ -367,6 +415,8 @@ static void Do_Hunt_Cycle(void) {
         BK4819_SetScanFrequency(sHuntFrequency);
         sHuntCssAttempts = 0;
         sHuntState = HUNT_CSS;
+        gInterceptorHuntTickerActive = false; // stopped on a stable candidate - not "scrolling" anymore
+        gUpdateDisplay = true;
         return;
     }
 
@@ -418,6 +468,7 @@ static void Do_GridCheck_Cycle(void) {
     static uint16_t checking_idx = 0xFFFF;
 
     if (gInterceptorActiveFrequency != 0) {
+        gInterceptorCheckingSlot = -1;
         Handle_Active_Channel_Dwell();
         return;
     }
@@ -432,8 +483,11 @@ static void Do_GridCheck_Cycle(void) {
                 break;
             }
         }
-        if (checking_idx == 0xFFFF) return; // grid is empty
+        if (checking_idx == 0xFFFF) { gInterceptorCheckingSlot = -1; return; } // grid is empty
     }
+
+    gInterceptorCheckingSlot = (int16_t)checking_idx;
+    gUpdateDisplay = true;
 
     uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency);
     if (result == 0) return; // still settling
@@ -443,6 +497,7 @@ static void Do_GridCheck_Cycle(void) {
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gUpdateDisplay = true;
     }
+    gInterceptorCheckingSlot = -1;
     checking_idx = 0xFFFF; // done with this one either way, pick a new one next time
 }
 
@@ -456,6 +511,7 @@ static void Do_FastGridScan_Cycle(void) {
     static int16_t checking_idx = -1;
 
     if (gInterceptorActiveFrequency != 0) {
+        gInterceptorCheckingSlot = -1;
         Handle_Active_Channel_Dwell();
         return;
     }
@@ -472,8 +528,11 @@ static void Do_FastGridScan_Cycle(void) {
                 break;
             }
         }
-        if (checking_idx == -1) return; // grid is empty
+        if (checking_idx == -1) { gInterceptorCheckingSlot = -1; return; } // grid is empty
     }
+
+    gInterceptorCheckingSlot = checking_idx;
+    gUpdateDisplay = true;
 
     uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency);
     if (result == 0) return;
@@ -483,6 +542,7 @@ static void Do_FastGridScan_Cycle(void) {
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gUpdateDisplay = true;
     }
+    gInterceptorCheckingSlot = -1;
     checking_idx = -1;
 }
 
@@ -499,16 +559,27 @@ static void Do_FastGridScan_Cycle(void) {
 #define SWEEP_VHF_END    17400000  // 174.00000 MHz
 #define SWEEP_UHF_START  45000000  // 450.00000 MHz
 #define SWEEP_UHF_END    47000000  // 470.00000 MHz
-#define SWEEP_STEP_SIZE  2500      // 25 kHz - adjust if you want finer/coarser steps
+// 12.5 kHz, not 25 kHz - confirmed via FCC.gov: since Jan 1 2013, Part 90
+// licensees in these exact bands (150-174 MHz, 421-470 MHz) are required
+// to operate at 12.5kHz efficiency. A 25kHz step would silently skip
+// roughly half of all real, legally-operating channels - not slower,
+// genuinely never tested at all. This doubles total sweep time versus the
+// old 25kHz step, but that's the real tradeoff for actually covering the
+// channels that exist.
+#define SWEEP_STEP_SIZE  1250
 
 static void Do_BandSweep_Cycle(void) {
     static uint32_t sSweepFreq = SWEEP_VHF_START;
     static bool     sSweepInVhf = true;
 
     if (gInterceptorActiveFrequency != 0) {
+        gInterceptorHuntTickerActive = false;
         Handle_Active_Channel_Dwell();
         return;
     }
+
+    gInterceptorHuntTickerActive = true;
+    gInterceptorHuntTickerFreq   = sSweepFreq;
 
     uint8_t result = Check_Candidate_Frequency(sSweepFreq);
     if (result == 0) return; // still settling
@@ -519,6 +590,7 @@ static void Do_BandSweep_Cycle(void) {
             if (gLockoutList[i] == sSweepFreq) { blacklisted = true; break; }
 
         if (!blacklisted) {
+            gInterceptorHuntTickerActive = false;
             INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
             gInterceptorActiveFrequency = sSweepFreq;
             gUpdateDisplay = true;
@@ -538,29 +610,13 @@ static void Do_BandSweep_Cycle(void) {
 }
 
 void INTERCEPTOR_Engine_Tick(void) {
-    // Never interrupt an actual live transmission.
-    if (gCurrentFunction == FUNCTION_TRANSMIT)
-        return;
-
-    // FUNCTION_INCOMING is now also OUR OWN success signal while we're
-    // mid-check (see Check_Candidate_Frequency) - only treat it as "leave
-    // this alone" when we're NOT the one who caused it, i.e. when we're
-    // not currently waiting on a candidate check or already dwelling on a
-    // confirmed hit.
-    if (gCurrentFunction == FUNCTION_INCOMING
-        && sCandCheckState != CANDCHECK_WAITING
-        && gInterceptorActiveFrequency == 0
-        && !gInterceptorTxOverrideActive)
-        return;
-
     // This firmware's real Dual Watch feature retunes the radio on its own
     // independent timer, completely regardless of what screen is showing
     // (confirmed in app/app.c - none of its conditions check gScreenToDisplay
-    // at all). Grid mode is always doing some form of scanning (hunting,
-    // band sweep, or checking the grid list) - Dual Watch has to stay off
-    // for all of it, and only come back once you've actually left the grid
-    // screen entirely. Properly saved and restored here, not just forced
-    // off one-way (which would leave it stuck off forever).
+    // at all). Save/restore runs first, unconditionally, every tick - not
+    // gated behind the grid-screen check below - so restoration on
+    // returning to the main screen always happens even on the very tick
+    // we're about to stop scanning.
     //
     // Cross-Band RX/TX is handled the same way, following this firmware's
     // own real precedent - the built-in scanner (CHFRSCANNER_Start/Stop)
@@ -582,11 +638,53 @@ void INTERCEPTOR_Engine_Tick(void) {
                 gEeprom.CROSS_BAND_RX_TX = sSavedCrossBand;
                 sSavedCrossBand = 0xFF;
             }
+            // We directly overwrite gRxVfo->CHANNEL_BANDWIDTH during our own
+            // checks (see Tune_RxVfo_To) - force the same real, full
+            // reconfigure this firmware already uses elsewhere (see
+            // End_Interceptor_PTT) so bandwidth and everything else gets
+            // properly re-derived from the actual stored channel settings,
+            // not just left overwritten from our last check.
+            gFlagReconfigureVfos = true;
         }
     }
 
+    // Grid mode IS the scanning - it should only actually run while the
+    // grid screen is genuinely showing. Previously the engine kept
+    // scanning in the background regardless of which screen was displayed,
+    // which meant leaving the grid screen didn't actually stop it, still
+    // risking exactly the kind of conflict the Dual Watch fix above was
+    // meant to prevent. Also gives the status bar's "S" indicator (see
+    // ui/status.c) something exact and honest to key off of.
+    if (gScreenToDisplay != DISPLAY_INTERCEPTOR) {
+        Hunt_Reset();
+        gInterceptorActiveFrequency = 0;
+        gInterceptorFlashSlot = -1;
+        gInterceptorFlashCount = 0;
+        gInterceptorCheckingSlot = -1;
+        gInterceptorHuntTickerActive = false;
+        return;
+    }
+
+    // Never interrupt an actual live transmission.
+    if (gCurrentFunction == FUNCTION_TRANSMIT)
+        return;
+
+    // FUNCTION_INCOMING is now also OUR OWN success signal while we're
+    // mid-check (see Check_Candidate_Frequency) - only treat it as "leave
+    // this alone" when we're NOT the one who caused it, i.e. when we're
+    // not currently waiting on a candidate check or already dwelling on a
+    // confirmed hit.
+    if (gCurrentFunction == FUNCTION_INCOMING
+        && sCandCheckState != CANDCHECK_WAITING
+        && gInterceptorActiveFrequency == 0
+        && !gInterceptorTxOverrideActive)
+        return;
+
     if (gInterceptorBandSweepActive) {
-        Do_BandSweep_Cycle();
+        static bool do_sweep_next = true;
+        if (do_sweep_next) Do_BandSweep_Cycle();
+        else                 Do_GridCheck_Cycle();
+        do_sweep_next = !do_sweep_next;
         return; // mutually exclusive with sniffing/fast-scan below
     }
 
