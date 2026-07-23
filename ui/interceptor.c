@@ -144,6 +144,18 @@ void UI_DisplayInterceptorGridPage(void)
                 || (gInterceptorTxOverrideActive && i == gInterceptorHighlight)) {
                 UI_DrawMeterSweep(page, x, xEnd);
             }
+
+            if (gScanList[idx].IsLocked) {
+                // small permanent mark for manually-added/locked channels,
+                // so they're visually distinct from auto-detected ones -
+                // placed away from the border's exact edge pixels so it
+                // doesn't get erased by the selection cursor's XOR
+                uint8_t markCenter = x + (xEnd - x) / 2;
+                if (page + 1 < FRAME_LINES) {
+                    for (uint8_t col = markCenter - 1; col <= markCenter + 1 && col < LCD_WIDTH; col++)
+                        gFrameBuffer[page + 1][col] ^= 0x20;
+                }
+            }
         }
 
         if (i == gInterceptorHighlight) {

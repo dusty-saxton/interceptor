@@ -379,6 +379,54 @@ static void Do_FastGridScan_Cycle(void) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Band sweep: a separate, wide-range scan mode using plain RSSI stepping
+// across the real commercial VHF and UHF land-mobile bands (confirmed via
+// FCC.gov: 150-174 MHz VHF, 450-470 MHz UHF - not the ham bands), continuously
+// alternating between the two rather than sweeping one and stopping. This
+// is deliberately simpler than the hunt engine: one RSSI check per step, no
+// multi-poll stability confirmation and no CTCSS/DCS tone detection - that
+// precision isn't practical at this sweep speed across this much spectrum.
+// Non-blocking, one step per call, same as everything else here.
+// ---------------------------------------------------------------------
+
+// Units here are the same as gScanList[].Frequency: 10Hz per count
+// (confirmed against this firmware's own frequency-entry conversion).
+#define SWEEP_VHF_START  15000000  // 150.00000 MHz
+#define SWEEP_VHF_END    17400000  // 174.00000 MHz
+#define SWEEP_UHF_START  45000000  // 450.00000 MHz
+#define SWEEP_UHF_END    47000000  // 470.00000 MHz
+#define SWEEP_STEP_SIZE  2500      // 25 kHz - adjust if you want finer/coarser steps
+
+bool gInterceptorBandSweepActive = false;
+
+static void Do_BandSweep_Cycle(void) {
+    static uint32_t sSweepFreq = SWEEP_VHF_START;
+    static bool     sSweepInVhf = true;
+
+    BK4819_SetFrequency(sSweepFreq);
+    SYSTEM_DelayMs(5); // brief settle - PLL needs some lock time after retuning
+
+    if (Is_Frequency_Active()) {
+        bool blacklisted = false;
+        for (uint8_t i = 0; i < gLockoutCount; i++)
+            if (gLockoutList[i] == sSweepFreq) { blacklisted = true; break; }
+
+        if (!blacklisted)
+            INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
+    }
+
+    sSweepFreq += SWEEP_STEP_SIZE;
+
+    if (sSweepInVhf && sSweepFreq > SWEEP_VHF_END) {
+        sSweepInVhf = false;
+        sSweepFreq  = SWEEP_UHF_START;
+    } else if (!sSweepInVhf && sSweepFreq > SWEEP_UHF_END) {
+        sSweepInVhf = true;
+        sSweepFreq  = SWEEP_VHF_START;
+    }
+}
+
 void INTERCEPTOR_Engine_Tick(void) {
     // Never retune the radio away from an actual live transmission or
     // reception - these are this firmware's real states for "someone is
@@ -386,6 +434,11 @@ void INTERCEPTOR_Engine_Tick(void) {
     // transmitting" (FUNCTION_TRANSMIT).
     if (gCurrentFunction == FUNCTION_TRANSMIT || gCurrentFunction == FUNCTION_INCOMING)
         return;
+
+    if (gInterceptorBandSweepActive) {
+        Do_BandSweep_Cycle();
+        return; // mutually exclusive with sniffing/fast-scan below
+    }
 
     if (gSniffingEnabled) {
         static bool do_hunt_next = true;

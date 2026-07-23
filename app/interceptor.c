@@ -212,6 +212,8 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         gWasFKeyPressed = false;
         gUpdateStatus   = true;
 
+        gInterceptorBandSweepActive = false; // mutually exclusive with band sweep
+
         if (!bKeyHeld) {
             gSniffingEnabled = !gSniffingEnabled;
         } else {
@@ -219,6 +221,56 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         }
         gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
         gUpdateDisplay = true;
+        return;
+    }
+
+    // F+5 toggles the wide VHF/UHF band sweep, same "handle it on our own
+    // screen too" reasoning as F+7 above.
+    if (gWasFKeyPressed && Key == KEY_5) {
+        if (!bKeyPressed) return; // act on press, not release
+        gWasFKeyPressed = false;
+        gUpdateStatus   = true;
+
+        gSniffingEnabled = false; // mutually exclusive with regular sniffing
+        gInterceptorBandSweepActive = !gInterceptorBandSweepActive;
+
+        gInterceptorViewActive = true;
+        gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
+        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+        gUpdateDisplay = true;
+        return;
+    }
+
+    // STAR now requires a genuine long-press-then-release to delete a slot
+    // (and blacklist it, if it wasn't a manually-added one) - a single tap
+    // used to delete instantly with no confirmation, which was too easy to
+    // trigger by accident while just navigating.
+    if (Key == KEY_STAR) {
+        if (!bKeyPressed && bKeyHeld) {
+            uint16_t idx = CurrentSlotIndex();
+            INTERCEPTOR_DeleteAndBlacklist(idx);
+            gUpdateDisplay = true;
+        }
+        return;
+    }
+
+    // EXIT: short press leaves the grid screen as normal; a long press
+    // instead clears the entire blacklist (an escape hatch, since there was
+    // previously no way to ever see or undo what's been blacklisted). Only
+    // applies during normal navigation - naming and channel-entry mode
+    // still handle their own EXIT below, unaffected by this.
+    if (Key == KEY_EXIT && !gInterceptorEnteringChannel && gInterceptorNameEditIndex < 0) {
+        if (!bKeyPressed) {
+            if (bKeyHeld) {
+                gLockoutCount = 0;
+                memset(gLockoutList, 0, sizeof(gLockoutList));
+                gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
+                gUpdateDisplay = true;
+            } else {
+                gInterceptorViewActive = false;
+                gRequestDisplayScreen  = DISPLAY_MAIN;
+            }
+        }
         return;
     }
 
@@ -304,18 +356,6 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                 Begin_Channel_Entry();
             else
                 Begin_Name_Edit();
-            break;
-        }
-
-        case KEY_EXIT:
-            gInterceptorViewActive = false;
-            gRequestDisplayScreen  = DISPLAY_MAIN;
-            break;
-
-        case KEY_STAR: {
-            uint16_t idx = CurrentSlotIndex();
-            INTERCEPTOR_DeleteAndBlacklist(idx);
-            gUpdateDisplay = true;
             break;
         }
 
