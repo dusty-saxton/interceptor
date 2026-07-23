@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define GRID_PAGE_SIZE    15
+#define GRID_PAGE_SIZE    9
 #define GRID_MAX_PAGES    10                                 // hardware-safe ceiling
 #define GRID_TOTAL_SLOTS  (GRID_PAGE_SIZE * GRID_MAX_PAGES)  // 150
 #define MAX_LOCKOUTS      20
@@ -26,5 +26,6 @@ extern uint8_t  gCurrentGridPage;
 extern bool     gSniffingEnabled;       // true = hunt+grid-check alternation; false = fast grid-only scan
 extern bool     gInterceptorViewActive; // true = grid screen is what's currently shown
 extern uint32_t gInterceptorActiveFrequency; // 0 = nothing currently receiving audio
+extern uint8_t  gInterceptorMeterPercent;    // 0-100, current sweep meter fill level
 
 #endif

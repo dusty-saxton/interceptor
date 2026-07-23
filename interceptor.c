@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "functions.h"
 #include "dcs.h"
+#include "misc.h"
 #include <string.h>
 
 InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS] = {0};
@@ -15,6 +16,7 @@ uint8_t  gCurrentGridPage = 0;
 bool     gSniffingEnabled = false;
 bool     gInterceptorViewActive = false;
 uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving audio
+uint8_t  gInterceptorMeterPercent = 0;    // 0-100, how full the sweep meter should be
 
 // RSSI threshold used as a base activity gate for the grid-check cycle
 // (checking already-saved channels). NOTE: 70 is a starting guess - adjust
@@ -27,8 +29,27 @@ uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving aud
 #define ACTIVITY_NOISE_MAX   90
 #define ACTIVITY_GLITCH_MAX  100
 
+// Rough RSSI range used to scale the meter bar - NOT hardware-calibrated,
+// just a starting guess. ACTIVITY_RSSI_THRESHOLD is treated as "empty"
+// and METER_RSSI_FULL as "completely full" - adjust both once you've seen
+// how real signals on your radio actually read.
+#define METER_RSSI_FULL  200
+
+static void Update_Meter_Level(uint16_t rssi) {
+    if (rssi <= ACTIVITY_RSSI_THRESHOLD) {
+        gInterceptorMeterPercent = 0;
+        return;
+    }
+    uint32_t span = METER_RSSI_FULL - ACTIVITY_RSSI_THRESHOLD;
+    uint32_t over = rssi - ACTIVITY_RSSI_THRESHOLD;
+    uint32_t pct  = (over * 100) / span;
+    gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
+}
+
 static bool Is_Frequency_Active(void) {
-    if (BK4819_GetRSSI() < ACTIVITY_RSSI_THRESHOLD) return false;
+    uint16_t rssi = BK4819_GetRSSI();
+    Update_Meter_Level(rssi);
+    if (rssi < ACTIVITY_RSSI_THRESHOLD) return false;
     if (BK4819_GetExNoiceIndicator() > ACTIVITY_NOISE_MAX) return false;
     if (BK4819_GetGlitchIndicator() > ACTIVITY_GLITCH_MAX) return false;
     return true;
@@ -78,7 +99,8 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
     gScanList[target].Frequency = freq;
     gScanList[target].CodeType  = codeType;
     gScanList[target].Code      = code;
-    AUDIO_PlayBeep(BEEP_1KHZ_60MS_OPTIONAL);
+    AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP); // always plays - not gated by the global beep setting
+    gUpdateDisplay = true; // new capture won't show up on screen otherwise
 }
 
 void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
@@ -114,9 +136,11 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
 // ---------------------------------------------------------------------
 
 #define REPLY_WAIT_10MS_TICKS  450  // ~4.5 seconds
+#define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
+static uint16_t sMeterRedrawCountdown = 0;
 
 // Called once per real 10ms system tick from APP_TimeSlice10ms().
 void INTERCEPTOR_TimeSlice10ms(void) {
@@ -126,6 +150,20 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             sWaitingForReply = false;
             gInterceptorActiveFrequency = 0; // give up waiting, resume scanning
             INTERCEPTOR_SortByPopularity();
+            gUpdateDisplay = true; // clear the invert highlight from screen
+        }
+    }
+
+    // While a channel is actively being listened to, redraw the meter at a
+    // throttled rate (not every single main-loop tick, which would hammer
+    // the screen far more than needed) so the sweep visibly animates with
+    // the live signal level.
+    if (gInterceptorActiveFrequency != 0) {
+        if (sMeterRedrawCountdown > 0) {
+            sMeterRedrawCountdown--;
+        } else {
+            sMeterRedrawCountdown = METER_REDRAW_10MS_TICKS;
+            gUpdateDisplay = true;
         }
     }
 }
@@ -287,6 +325,7 @@ static void Do_GridCheck_Cycle(void) {
             if (Is_Frequency_Active()) {
                 if (gScanList[idx].HitCount < 255) gScanList[idx].HitCount++;
                 gInterceptorActiveFrequency = gScanList[idx].Frequency; // start dwelling
+                gUpdateDisplay = true; // show the invert highlight
             }
             return;
         }
@@ -320,6 +359,7 @@ static void Do_FastGridScan_Cycle(void) {
             if (Is_Frequency_Active()) {
                 if (gScanList[*idx].HitCount < 255) gScanList[*idx].HitCount++;
                 gInterceptorActiveFrequency = gScanList[*idx].Frequency;
+                gUpdateDisplay = true; // show the invert highlight
             }
             return;
         }

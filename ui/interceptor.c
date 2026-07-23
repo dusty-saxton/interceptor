@@ -12,71 +12,87 @@ extern int8_t  gInterceptorNameEditIndex; // -1 = not editing
 extern char    gInterceptorNameBuf[7];
 extern bool    gInterceptorEnteringChannel;
 extern uint32_t gInterceptorActiveFrequency;
+extern uint8_t  gInterceptorMeterPercent;
 
 // gFrameBuffer is FRAME_LINES (7) pages tall, each page = 8 pixels, indexed
-// directly (NOT a pixel Y coordinate - confirmed against the real
-// UI_PrintString implementation in ui/helper.c). The status bar uses the
-// big font (2 pages tall: 0 and 1); the 5 grid rows use the small font
-// (1 page each), occupying pages 2 through 6 - exactly filling the screen.
+// directly (confirmed against the real UI_PrintString implementation in
+// ui/helper.c - NOT a pixel Y coordinate). Layout for the 3x3 grid:
+//   page 0        - status bar (small font, 1 page)
+//   pages 1-2     - grid row 0 (big font, 2 pages)
+//   pages 3-4     - grid row 1 (big font, 2 pages)
+//   pages 5-6     - grid row 2 (big font, 2 pages)
+// This uses all 7 pages exactly, with room for the big, bold font.
 #define STATUS_LINE      0
-#define GRID_FIRST_LINE  2
+#define GRID_FIRST_LINE  1
+#define GRID_ROWS        3
+#define GRID_COLS        3
 
-// Inverts one page's worth of pixels across a column range - used to show
-// a cell currently receiving live audio. Operates on a single page only,
-// since every grid cell here is exactly one page tall.
-static void UI_InvertCellBlock(uint8_t page, uint8_t x1, uint8_t x2)
+// Inverts a proportional left-to-right slice of a 2-page-tall cell, based
+// on gInterceptorMeterPercent (0-100) - a live signal-strength sweep rather
+// than an instant full-cell flip.
+static void UI_DrawMeterSweep(uint8_t page, uint8_t x1, uint8_t x2)
 {
-    if (page >= FRAME_LINES) return;
-    for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
-        gFrameBuffer[page][col] ^= 0xFF;
+    uint8_t width    = (x2 >= x1) ? (x2 - x1 + 1) : 0;
+    uint8_t fillCols = (uint8_t)(((uint16_t)width * gInterceptorMeterPercent) / 100);
+    uint8_t xFill     = x1 + fillCols;
+    if (xFill > x2) xFill = x2;
+
+    for (uint8_t col = x1; col <= xFill && col < LCD_WIDTH; col++) {
+        if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
+        if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
+    }
 }
 
-// Thin border outline (top/bottom rows + left/right columns of the cell)
-// - used for the navigation cursor, so it never collides with
-// UI_InvertCellBlock (two XORs on the same pixels would cancel out and
-// hide both states at once).
+// Thin border outline around a 2-page-tall cell - used for the navigation
+// cursor, so it never collides with UI_InvertCellBlock (two XORs on the
+// same pixels would cancel out and hide both states at once).
 static void UI_DrawSelectionBox(uint8_t page, uint8_t x1, uint8_t x2)
 {
-    if (page >= FRAME_LINES) return;
-    for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
-        gFrameBuffer[page][col] ^= 0x81; // top pixel + bottom pixel of this page's 8-pixel column
-    if (x1 < LCD_WIDTH) gFrameBuffer[page][x1] ^= 0xFF;
-    if (x2 < LCD_WIDTH) gFrameBuffer[page][x2] ^= 0xFF;
+    if (page < FRAME_LINES)
+        for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
+            gFrameBuffer[page][col] ^= 0x01; // top edge
+    if (page + 1 < FRAME_LINES)
+        for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
+            gFrameBuffer[page + 1][col] ^= 0x80; // bottom edge
+    if (x1 < LCD_WIDTH) {
+        if (page < FRAME_LINES)     gFrameBuffer[page][x1]     ^= 0xFF;
+        if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][x1] ^= 0xFF;
+    }
+    if (x2 < LCD_WIDTH) {
+        if (page < FRAME_LINES)     gFrameBuffer[page][x2]     ^= 0xFF;
+        if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][x2] ^= 0xFF;
+    }
 }
 
 void UI_DisplayInterceptorGridPage(void)
 {
     memset(gFrameBuffer, 0, sizeof(gFrameBuffer));
 
-    // --- Status bar: sniffing state + page indicator ---
+    // --- Status bar: small font so the grid rows below have room to be big ---
     char status_str[24];
     uint8_t total_pages = INTERCEPTOR_GetUsedPageCount();
 
-    sprintf(status_str, gSniffingEnabled ? "INTERCEPT ON  P:%u/%u" : "INTERCEPT OFF P:%u/%u",
+    sprintf(status_str, gSniffingEnabled ? "INTERCEPT ON P:%u/%u" : "INTERCEPT OFF P:%u/%u",
             gCurrentGridPage + 1, total_pages);
-    UI_PrintString(status_str, 2, 127, STATUS_LINE, 4);
+    UI_PrintStringSmallNormal(status_str, 2, 127, STATUS_LINE);
 
-    // Invert both status bar pages when sniffing is active - a quick
-    // at-a-glance highlighted banner.
     if (gSniffingEnabled) {
-        for (uint8_t col = 0; col < LCD_WIDTH; col++) {
-            gFrameBuffer[STATUS_LINE][col]     ^= 0xFF;
-            gFrameBuffer[STATUS_LINE + 1][col] ^= 0xFF;
-        }
+        for (uint8_t col = 0; col < LCD_WIDTH; col++)
+            gFrameBuffer[STATUS_LINE][col] ^= 0xFF;
     }
 
-    // --- 15-cell grid: 5 rows x 3 columns, one page tall per row ---
+    // --- 9-cell grid: 3 rows x 3 columns, 2 pages tall per row (big font) ---
     uint16_t offset = gCurrentGridPage * GRID_PAGE_SIZE;
 
     for (uint8_t i = 0; i < GRID_PAGE_SIZE; i++) {
         uint16_t idx = offset + i;
         if (idx >= GRID_TOTAL_SLOTS) break;
 
-        uint8_t col  = i % 3;
-        uint8_t row  = i / 3;
-        uint8_t page = GRID_FIRST_LINE + row;
-        uint8_t x    = (col == 0) ? 2 : ((col == 1) ? 45 : 88);
-        uint8_t xEnd = x + 40;
+        uint8_t col  = i % GRID_COLS;
+        uint8_t row  = i / GRID_COLS;
+        uint8_t page = GRID_FIRST_LINE + (row * 2);
+        uint8_t x    = (col == 0) ? 0 : ((col == 1) ? 43 : 86);
+        uint8_t xEnd = x + 41;
 
         char box_out[16];
 
@@ -86,7 +102,7 @@ void UI_DisplayInterceptorGridPage(void)
             for (uint8_t d = 0; d < gInputBoxIndex && d < 3; d++)
                 echo[d] = typed[d];
             sprintf(box_out, "C%s", echo);
-            UI_PrintStringSmallNormal(box_out, x, xEnd, page);
+            UI_PrintString(box_out, x, xEnd, page, 7);
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -94,7 +110,7 @@ void UI_DisplayInterceptorGridPage(void)
         if (idx == offset + gInterceptorHighlight && gInterceptorNameEditIndex >= 0) {
             strncpy(box_out, gInterceptorNameBuf, 6);
             box_out[6] = '\0';
-            UI_PrintStringSmallNormal(box_out, x, xEnd, page);
+            UI_PrintString(box_out, x, xEnd, page, 7);
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -112,10 +128,10 @@ void UI_DisplayInterceptorGridPage(void)
                         (unsigned int)((raw_f % 100000) / 1000));
             }
 
-            UI_PrintStringSmallNormal(box_out, x, xEnd, page);
+            UI_PrintString(box_out, x, xEnd, page, 7);
 
             if (gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency) {
-                UI_InvertCellBlock(page, x, xEnd);
+                UI_DrawMeterSweep(page, x, xEnd);
             }
         }
 
