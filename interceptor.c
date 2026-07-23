@@ -87,7 +87,7 @@ static uint8_t Check_Candidate_Frequency(uint32_t freq) {
 // as active at all, that's FUNCTION_INCOMING's job now.
 // NOTE: not hardware-calibrated, a starting guess like everything else here.
 #define METER_RSSI_MIN   70
-#define METER_RSSI_FULL  400
+#define METER_RSSI_FULL  280
 
 static void Update_Meter_Level(void) {
     uint16_t rssi = BK4819_GetRSSI();
