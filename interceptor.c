@@ -194,7 +194,14 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             // anywhere we can reuse it from, so this is a simpler
             // approximation using the same underlying real function.
             uint16_t amp = BK4819_GetVoiceAmplitudeOut();
-            uint32_t pct = ((uint32_t)amp * 100) / 65535;
+            // The real mic-bar feature (ui/main.c) multiplies this reading
+            // by 8 before doing anything else with it - normal speech reads
+            // much lower than a sharp transient, which is exactly why only
+            // a fingernail tap was registering before. Borrowing that same
+            // real gain factor rather than guessing a new one.
+            uint32_t boosted = (uint32_t)amp * 8;
+            if (boosted > 65535) boosted = 65535;
+            uint32_t pct = (boosted * 100) / 65535;
             gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
         }
 
