@@ -72,7 +72,7 @@ void UI_DisplayInterceptorGridPage(void)
     char status_str[24];
     uint8_t total_pages = INTERCEPTOR_GetUsedPageCount();
 
-    sprintf(status_str, gSniffingEnabled ? "INTERCEPT ON P:%u/%u" : "INTERCEPT OFF P:%u/%u",
+    sprintf(status_str, gSniffingEnabled ? "INT ON  P:%u/%u" : "INT OFF P:%u/%u",
             gCurrentGridPage + 1, total_pages);
     UI_PrintStringSmallNormal(status_str, 2, 127, STATUS_LINE);
 
@@ -101,7 +101,7 @@ void UI_DisplayInterceptorGridPage(void)
             char echo[4] = "___";
             for (uint8_t d = 0; d < gInputBoxIndex && d < 3; d++)
                 echo[d] = typed[d];
-            sprintf(box_out, "C%s", echo);
+            sprintf(box_out, "%s", echo);
             UI_PrintString(box_out, x, xEnd, page, 7);
             UI_DrawSelectionBox(page, x, xEnd);
             continue;

@@ -88,20 +88,15 @@ static void End_Interceptor_PTT(void)
 
 // Moves the highlight to the next/previous slot, skipping empty ones,
 // bounded so it can never spin forever on an empty page.
+// Moves the highlight to the next/previous slot on the current page,
+// wrapping around. Deliberately does NOT skip empty slots - you need to
+// be able to navigate onto an empty one to add a channel there.
 static void Move_Highlight(int8_t direction)
 {
-    for (uint8_t tries = 0; tries < GRID_PAGE_SIZE; tries++) {
-        int8_t next = (int8_t)gInterceptorHighlight + direction;
-        if (next < 0) next = GRID_PAGE_SIZE - 1;
-        if (next >= GRID_PAGE_SIZE) next = 0;
-        gInterceptorHighlight = (uint8_t)next;
-
-        uint16_t idx = (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
-        if (gScanList[idx].Frequency != 0)
-            return; // landed on a populated slot
-    }
-    // page has nothing populated - highlight stays wherever it landed,
-    // that's fine since MENU on an empty slot starts a channel add anyway
+    int8_t next = (int8_t)gInterceptorHighlight + direction;
+    if (next < 0) next = GRID_PAGE_SIZE - 1;
+    if (next >= GRID_PAGE_SIZE) next = 0;
+    gInterceptorHighlight = (uint8_t)next;
 }
 
 static void Begin_Name_Edit(void)
@@ -195,6 +190,25 @@ static void Confirm_Channel_Entry(void)
 
 void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 {
+    // F+7 toggles sniffing, same as it does from the main screen. Needed
+    // here too since this screen has its own key handler entirely separate
+    // from app/main.c's - pressing F+7 while already viewing the grid would
+    // otherwise never reach that logic at all.
+    if (gWasFKeyPressed && Key == KEY_7) {
+        if (!bKeyPressed) return; // act on press, not release
+        gWasFKeyPressed = false;
+        gUpdateStatus   = true;
+
+        if (!bKeyHeld) {
+            gSniffingEnabled = !gSniffingEnabled;
+        } else {
+            gSniffingEnabled = false;
+        }
+        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+        gUpdateDisplay = true;
+        return;
+    }
+
     // PTT needs both press (start TX) and release (end TX) events, unlike
     // every other key on this screen - handle it before the "press only"
     // guard below swallows the release.
