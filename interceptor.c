@@ -8,6 +8,7 @@
 #include "misc.h"
 #include "settings.h"
 #include "radio.h"
+#include "ui/ui.h"
 #include <string.h>
 
 InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS] = {0};
