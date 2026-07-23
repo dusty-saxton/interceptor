@@ -28,5 +28,6 @@ extern bool     gInterceptorViewActive; // true = grid screen is what's currentl
 extern uint32_t gInterceptorActiveFrequency; // 0 = nothing currently receiving audio
 extern uint8_t  gInterceptorMeterPercent;    // 0-100, current sweep meter fill level
 extern bool     gInterceptorTxOverrideActive; // true while transmitting on a grid channel via PTT override
+extern bool     gInterceptorBandSweepActive;  // true while the F+5 VHF/UHF band sweep is running
 
 #endif

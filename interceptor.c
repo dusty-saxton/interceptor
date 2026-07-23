@@ -176,7 +176,18 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             sMeterRedrawCountdown--;
         } else {
             sMeterRedrawCountdown = METER_REDRAW_10MS_TICKS;
-            gUpdateDisplay = true;
+
+            if (gInterceptorTxOverrideActive) {
+                // The normal gUpdateDisplay -> GUI_DisplayScreen() path
+                // doesn't seem to actually refresh the screen during an
+                // active transmission - this firmware's own real mic-bar
+                // feature has the same problem and works around it by
+                // calling its draw function and blitting directly instead
+                // of relying on the flag. Mirroring that here.
+                UI_DisplayInterceptorGridPage();
+            } else {
+                gUpdateDisplay = true;
+            }
         }
     }
 }
