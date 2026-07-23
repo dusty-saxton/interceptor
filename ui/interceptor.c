@@ -147,14 +147,14 @@ void UI_DisplayInterceptorGridPage(void)
             }
 
             if (gScanList[idx].IsLocked) {
-                // small permanent mark for manually-added/locked channels,
+                // full-width underline for manually-added/locked channels,
                 // so they're visually distinct from auto-detected ones -
-                // placed away from the border's exact edge pixels so it
-                // doesn't get erased by the selection cursor's XOR
-                uint8_t markCenter = x + (xEnd - x) / 2;
+                // uses the very bottom row of the cell (bit 0x80, matching
+                // the "bottom edge" convention already used elsewhere) so
+                // it doesn't collide with the selection cursor's border XOR
                 if (page + 1 < FRAME_LINES) {
-                    for (uint8_t col = markCenter - 1; col <= markCenter + 1 && col < LCD_WIDTH; col++)
-                        gFrameBuffer[page + 1][col] ^= 0x20;
+                    for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++)
+                        gFrameBuffer[page + 1][col] ^= 0x40;
                 }
             }
         }

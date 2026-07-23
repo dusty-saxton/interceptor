@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "radio.h"
 #include "ui/ui.h"
+#include "app/app.h"
 #include <string.h>
 
 InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS] = {0};
@@ -68,7 +69,17 @@ static uint8_t Check_Candidate_Frequency(uint32_t freq) {
     if (sCandSettleCountdown > 0) return 0; // still counting down (see INTERCEPTOR_TimeSlice10ms)
 
     sCandCheckState = CANDCHECK_IDLE;
-    return (gCurrentFunction == FUNCTION_INCOMING) ? 1 : 2;
+    if (gCurrentFunction == FUNCTION_INCOMING) {
+        // Detecting FUNCTION_INCOMING alone isn't enough - this firmware's
+        // own real scanner (CHFRSCANNER_ContinueScanning) explicitly calls
+        // APP_StartListening() at this exact point to actually transition
+        // into listening, which is what unmutes audio. Without this call,
+        // detection works but nothing is ever actually heard - confirmed
+        // missing piece.
+        APP_StartListening(FUNCTION_RECEIVE);
+        return 1;
+    }
+    return 2;
 }
 
 // RSSI-based meter fill, purely cosmetic (how strong does the confirmed-
@@ -550,14 +561,27 @@ void INTERCEPTOR_Engine_Tick(void) {
     // for all of it, and only come back once you've actually left the grid
     // screen entirely. Properly saved and restored here, not just forced
     // off one-way (which would leave it stuck off forever).
+    //
+    // Cross-Band RX/TX is handled the same way, following this firmware's
+    // own real precedent - the built-in scanner (CHFRSCANNER_Start/Stop)
+    // does exactly this same save-disable-restore around its own scanning.
     {
-        static uint8_t sSavedDualWatch = 0xFF; // 0xFF = nothing currently saved
+        static uint8_t sSavedDualWatch  = 0xFF; // 0xFF = nothing currently saved
+        static uint8_t sSavedCrossBand  = 0xFF;
         if (gScreenToDisplay != DISPLAY_MAIN) {
             if (sSavedDualWatch == 0xFF) sSavedDualWatch = gEeprom.DUAL_WATCH;
-            gEeprom.DUAL_WATCH = DUAL_WATCH_OFF;
-        } else if (sSavedDualWatch != 0xFF) {
-            gEeprom.DUAL_WATCH = sSavedDualWatch;
-            sSavedDualWatch = 0xFF;
+            if (sSavedCrossBand == 0xFF) sSavedCrossBand = gEeprom.CROSS_BAND_RX_TX;
+            gEeprom.DUAL_WATCH       = DUAL_WATCH_OFF;
+            gEeprom.CROSS_BAND_RX_TX = CROSS_BAND_OFF;
+        } else {
+            if (sSavedDualWatch != 0xFF) {
+                gEeprom.DUAL_WATCH = sSavedDualWatch;
+                sSavedDualWatch = 0xFF;
+            }
+            if (sSavedCrossBand != 0xFF) {
+                gEeprom.CROSS_BAND_RX_TX = sSavedCrossBand;
+                sSavedCrossBand = 0xFF;
+            }
         }
     }
 
