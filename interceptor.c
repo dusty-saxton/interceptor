@@ -52,8 +52,18 @@ enum { CANDCHECK_IDLE, CANDCHECK_WAITING };
 static uint8_t  sCandCheckState = CANDCHECK_IDLE;
 static uint16_t sCandSettleCountdown = 0;
 
-static void Tune_RxVfo_To(uint32_t freq) {
+static void Tune_RxVfo_To(uint32_t freq, uint8_t codeType, uint8_t code) {
     gRxVfo->freq_config_RX.Frequency = freq;
+    // This was the actual bug behind audio cutting out after ~1 second
+    // unless VFO A already happened to be on the same channel: we were
+    // only ever changing the frequency, never the CTCSS/DCS tone-matching
+    // fields, so the real squelch decoder kept checking against whatever
+    // tone was left over from VFO A's PREVIOUS channel - completely
+    // unrelated to whatever grid cell we were actually checking. Initial
+    // carrier-open audio would play briefly, then the real tone-mismatch
+    // logic would correctly (from its own perspective) re-mute it.
+    gRxVfo->freq_config_RX.CodeType = codeType;
+    gRxVfo->freq_config_RX.Code     = code;
     // Force narrow bandwidth specifically for our own checks - this wasn't
     // being touched before, so every check inherited whatever bandwidth
     // gRxVfo already had (often WIDE). A wide receive filter means tuning
@@ -71,9 +81,9 @@ static void Tune_RxVfo_To(uint32_t freq) {
 //   1 = confirmed active (real squelch opened - FUNCTION_INCOMING)
 //   2 = confirmed not active, ready to move to the next candidate
 // Non-blocking - one step per call, same as everything else here.
-static uint8_t Check_Candidate_Frequency(uint32_t freq) {
+static uint8_t Check_Candidate_Frequency(uint32_t freq, uint8_t codeType, uint8_t code) {
     if (sCandCheckState == CANDCHECK_IDLE) {
-        Tune_RxVfo_To(freq);
+        Tune_RxVfo_To(freq, codeType, code);
         sCandCheckState      = CANDCHECK_WAITING;
         sCandSettleCountdown = CANDIDATE_SETTLE_10MS_TICKS;
         return 0;
@@ -489,7 +499,7 @@ static void Do_GridCheck_Cycle(void) {
     gInterceptorCheckingSlot = (int16_t)checking_idx;
     gUpdateDisplay = true;
 
-    uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency);
+    uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency, gScanList[checking_idx].CodeType, gScanList[checking_idx].Code);
     if (result == 0) return; // still settling
 
     if (result == 1) {
@@ -534,7 +544,7 @@ static void Do_FastGridScan_Cycle(void) {
     gInterceptorCheckingSlot = checking_idx;
     gUpdateDisplay = true;
 
-    uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency);
+    uint8_t result = Check_Candidate_Frequency(gScanList[checking_idx].Frequency, gScanList[checking_idx].CodeType, gScanList[checking_idx].Code);
     if (result == 0) return;
 
     if (result == 1) {
@@ -581,7 +591,7 @@ static void Do_BandSweep_Cycle(void) {
     gInterceptorHuntTickerActive = true;
     gInterceptorHuntTickerFreq   = sSweepFreq;
 
-    uint8_t result = Check_Candidate_Frequency(sSweepFreq);
+    uint8_t result = Check_Candidate_Frequency(sSweepFreq, CODE_TYPE_OFF, 0);
     if (result == 0) return; // still settling
 
     if (result == 1) {
