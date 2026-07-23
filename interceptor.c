@@ -733,7 +733,8 @@ void INTERCEPTOR_Engine_Tick(void) {
     // not currently waiting on a candidate check or already dwelling on a
     // confirmed hit.
     if (gCurrentFunction == FUNCTION_INCOMING
-        && sCandCheckState != CANDCHECK_WAITING
+        && sGridCheckState.state != CANDCHECK_WAITING
+        && sSweepCheckState.state != CANDCHECK_WAITING
         && gInterceptorActiveFrequency == 0
         && !gInterceptorTxOverrideActive)
         return;
