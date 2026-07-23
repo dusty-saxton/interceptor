@@ -126,31 +126,24 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
     return 2;
 }
 
-// RSSI-based meter fill, purely cosmetic (how strong does the confirmed-
-// active signal look) - this no longer decides whether something counts
-// as active at all, that's FUNCTION_INCOMING's job now.
-// NOTE: not hardware-calibrated, a starting guess like everything else here.
-#define METER_RSSI_MIN   70
-#define METER_RSSI_FULL  280
+// Real signal STRENGTH (RSSI) correctly stays steady for a well-received
+// signal - it doesn't fluctuate with speech, which is why the meter looked
+// "stuck" even though reception was working fine. What's actually needed
+// is the DEMODULATED AUDIO level. BK4819_GetVoiceAmplitudeOut() (used for
+// the TX meter) is confirmed TX-only by its one real usage in this
+// firmware (ui/main.c explicitly gates it to FUNCTION_TRANSMIT). The only
+// other candidate, BK4819_GetAfTxRx() ("Audio Frequency Tx/Rx"), exists in
+// the driver but has ZERO real usage anywhere in this firmware to learn
+// scaling from - unlike the TX fix, this is a genuine experiment, not a
+// confirmed-good port of real behavior. Expect this range to need real
+// hardware tuning.
+#define AF_LEVEL_MAX  63  // assumed from the 6-bit register mask - unverified
 
 static void Update_Meter_Level(void) {
-    uint16_t rssi = BK4819_GetRSSI();
-    // This only ever runs while genuinely dwelling/receiving, so a 10%
-    // floor here correctly means "RX is active" at all times, even if the
-    // signal is momentarily weak - the remaining 10-100% range reflects
-    // actual strength above that baseline. The previous x3 gain overshot
-    // and pinned to 100% far too easily - reverted to plain linear scaling
-    // underneath the floor instead.
-    if (rssi <= METER_RSSI_MIN) {
-        gInterceptorMeterPercent = 10;
-        return;
-    }
-    uint32_t span = METER_RSSI_FULL - METER_RSSI_MIN;
-    uint32_t over = rssi - METER_RSSI_MIN;
-    uint32_t pct  = (over * 100) / span;
+    uint8_t af = BK4819_GetAfTxRx();
+    uint32_t pct = ((uint32_t)af * 100) / AF_LEVEL_MAX;
     if (pct > 100) pct = 100;
-    // Compress 0-100 raw into 10-100, so the 90 points above the floor
-    // reflect actual signal strength.
+    // Same 10% floor + 10-100% scaling as before.
     gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
 }
 
@@ -777,10 +770,24 @@ void INTERCEPTOR_Engine_Tick(void) {
     }
 
     if (gSniffingEnabled) {
-        static bool do_hunt_next = true;
-        if (do_hunt_next) Do_Hunt_Cycle();
-        else               Do_GridCheck_Cycle();
-        do_hunt_next = !do_hunt_next;
+        // Same fix as band-sweep/grid-check: hunt's frequency-counting can
+        // span multiple ticks (waiting for 3 stable reads, then a tone
+        // check), and grid-check retuning away mid-measurement on the old
+        // every-tick swap was corrupting the count - a very plausible
+        // explanation for persistent frequency-doubling even after the
+        // filter-path fix. Whichever one is currently busy keeps the radio
+        // until it actually finishes.
+        static bool huntOwnsTuner = true;
+
+        if (huntOwnsTuner) {
+            Do_Hunt_Cycle();
+            if (sHuntState == HUNT_IDLE)
+                huntOwnsTuner = false;
+        } else {
+            Do_GridCheck_Cycle();
+            if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
+                huntOwnsTuner = true;
+        }
     } else {
         Hunt_Reset(); // sniffing is off - make sure hunt state doesn't linger
         Do_FastGridScan_Cycle();

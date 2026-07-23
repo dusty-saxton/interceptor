@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "frequencies.h"
 #include "app/generic.h"
+#include "driver/bk4819.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -59,6 +60,13 @@ static void Begin_Interceptor_PTT(void)
     sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = 0;
     sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
 
+    // Force narrowband (12.5kHz) - confirmed via FCC.gov: since Jan 1 2013
+    // this is a real legal requirement for Part 90 licensees in these exact
+    // bands (150-174 MHz, 421-470 MHz), not just a preference. Wideband
+    // deviation on a narrowband channel is out of compliance and would
+    // cause audible over-deviation/splatter into adjacent channels.
+    sInterceptorTxVfo.CHANNEL_BANDWIDTH = BK4819_FILTER_BW_NARROW;
+
     // re-derive the band for this specific frequency, then let the real,
     // verified firmware function compute the correct power calibration for
     // that band - never left stale from whatever the previous VFO had
@@ -87,6 +95,21 @@ static void End_Interceptor_PTT(void)
         gFlagReconfigureVfos = true;
         sSavedTxVfo = NULL;
     }
+}
+
+// Shared by long-press UP/DOWN and the side buttons.
+static void Change_Grid_Page(int8_t direction)
+{
+    uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
+    if (totalPages <= 1) return;
+
+    int8_t next = (int8_t)gCurrentGridPage + direction;
+    if (next < 0) next = totalPages - 1;
+    if (next >= totalPages) next = 0;
+    gCurrentGridPage = (uint8_t)next;
+    gInterceptorHighlight = 0;
+    gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+    gUpdateDisplay = true;
 }
 
 // Moves the highlight to the next/previous slot, skipping empty ones,
@@ -247,25 +270,34 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // slot past the first 9 was genuinely unreachable.
     if ((Key == KEY_UP || Key == KEY_DOWN) && bKeyHeld) {
         if (!bKeyPressed) {
-            uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
-            if (totalPages > 1) {
-                int8_t next = (int8_t)gCurrentGridPage + (Key == KEY_UP ? -1 : 1);
-                if (next < 0) next = totalPages - 1;
-                if (next >= totalPages) next = 0;
-                gCurrentGridPage = (uint8_t)next;
-                gInterceptorHighlight = 0;
-                gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
-                gUpdateDisplay = true;
-            }
+            Change_Grid_Page(Key == KEY_UP ? -1 : 1);
         }
         return;
     }
 
-    // STAR: short press deletes the selected slot (and blacklists it, if it
-    // wasn't a manually-added one); long press instead clears the entire
-    // blacklist. No confirmation on the short-press delete - a stray tap on
-    // STAR while navigating will delete instantly, by deliberate choice.
+    // STAR: short press deletes the selected slot with no blacklist entry
+    // at all ("get rid of this"); long press deletes AND blacklists it
+    // ("this is noise, never show it again"). No confirmation on the
+    // short-press delete - a stray tap on STAR while navigating will
+    // delete instantly, by deliberate choice.
     if (Key == KEY_STAR) {
+        if (!bKeyPressed) {
+            uint16_t idx = CurrentSlotIndex();
+            if (bKeyHeld) {
+                INTERCEPTOR_DeleteAndBlacklist(idx);
+            } else {
+                INTERCEPTOR_DeleteOnly(idx);
+            }
+            gUpdateDisplay = true;
+        }
+        return;
+    }
+
+    // EXIT: short press leaves the grid screen; long press clears the
+    // entire blacklist (an escape hatch, since there's otherwise no way to
+    // see or undo what's been blacklisted). Naming and channel-entry mode
+    // still handle their own EXIT below, unaffected by this.
+    if (Key == KEY_EXIT && !gInterceptorEnteringChannel && gInterceptorNameEditIndex < 0) {
         if (!bKeyPressed) {
             if (bKeyHeld) {
                 gLockoutCount = 0;
@@ -273,20 +305,9 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                 gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
                 gUpdateDisplay = true;
             } else {
-                uint16_t idx = CurrentSlotIndex();
-                INTERCEPTOR_DeleteAndBlacklist(idx);
-                gUpdateDisplay = true;
+                gInterceptorViewActive = false;
+                gRequestDisplayScreen  = DISPLAY_MAIN;
             }
-        }
-        return;
-    }
-
-    // EXIT: leaves the grid screen, short press only - naming and
-    // channel-entry mode still handle their own EXIT below, unaffected.
-    if (Key == KEY_EXIT && !gInterceptorEnteringChannel && gInterceptorNameEditIndex < 0) {
-        if (!bKeyPressed && !bKeyHeld) {
-            gInterceptorViewActive = false;
-            gRequestDisplayScreen  = DISPLAY_MAIN;
         }
         return;
     }
@@ -300,6 +321,17 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         } else {
             End_Interceptor_PTT();
         }
+        return;
+    }
+
+    // Naming a slot: UP/DOWN cycles letters, with auto-repeat while held -
+    // matches this firmware's own real character-cycling convention in
+    // app/menu.c, which responds to bKeyPressed regardless of held state.
+    // Positioned before the "clean press only" guard below, which
+    // previously blocked this entirely, requiring one click per letter
+    // with no way to hold-and-scroll.
+    if (gInterceptorNameEditIndex >= 0 && (Key == KEY_UP || Key == KEY_DOWN) && bKeyPressed) {
+        Cycle_Name_Character(Key == KEY_UP ? 1 : -1);
         return;
     }
 
@@ -333,12 +365,6 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // --- Naming a slot ---
     if (gInterceptorNameEditIndex >= 0) {
         switch (Key) {
-            case KEY_UP:
-                Cycle_Name_Character(1);
-                return;
-            case KEY_DOWN:
-                Cycle_Name_Character(-1);
-                return;
             case KEY_MENU:
                 if (gInterceptorNameEditIndex < 5) {
                     gInterceptorNameEditIndex++;

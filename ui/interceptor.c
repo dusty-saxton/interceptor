@@ -58,10 +58,10 @@ static void UI_DrawSelectionBox(uint8_t page, uint8_t x1, uint8_t x2)
 {
     if (page < FRAME_LINES)
         for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
-            gFrameBuffer[page][col] ^= 0x01; // top edge
+            gFrameBuffer[page][col] ^= 0x03; // top edge, 2px thick
     if (page + 1 < FRAME_LINES)
         for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
-            gFrameBuffer[page + 1][col] ^= 0x80; // bottom edge
+            gFrameBuffer[page + 1][col] ^= 0xC0; // bottom edge, 2px thick
     if (x1 < LCD_WIDTH) {
         if (page < FRAME_LINES)     gFrameBuffer[page][x1]     ^= 0xFF;
         if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][x1] ^= 0xFF;
@@ -126,7 +126,7 @@ void UI_DisplayInterceptorGridPage(void)
             for (uint8_t d = 0; d < gInputBoxIndex && d < 3; d++)
                 echo[d] = typed[d];
             sprintf(box_out, "%s", echo);
-            UI_PrintString(box_out, x, xEnd, page, 7);
+            UI_PrintStringSmallBold(box_out, x, xEnd, page);
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -134,7 +134,7 @@ void UI_DisplayInterceptorGridPage(void)
         if (idx == offset + gInterceptorHighlight && gInterceptorNameEditIndex >= 0) {
             strncpy(box_out, gInterceptorNameBuf, 6);
             box_out[6] = '\0';
-            UI_PrintString(box_out, x, xEnd, page, 7);
+            UI_PrintStringSmallBold(box_out, x, xEnd, page);
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -146,7 +146,10 @@ void UI_DisplayInterceptorGridPage(void)
             sprintf(box_out, "%3u.%02u",
                     (unsigned int)(raw_f / 100000),
                     (unsigned int)((raw_f % 100000) / 1000));
-            UI_PrintString(box_out, x, xEnd, page, 7);
+            UI_PrintStringSmallBold(box_out, x, xEnd, page);
+            if (i == gInterceptorHighlight) {
+                UI_DrawSelectionBox(page, x, xEnd);
+            }
             continue;
         }
 
@@ -177,7 +180,7 @@ void UI_DisplayInterceptorGridPage(void)
                         (unsigned int)((raw_f % 100000) / 1000));
             }
 
-            UI_PrintString(box_out, x, xEnd, page, 7);
+            UI_PrintStringSmallBold(box_out, x, xEnd, page);
 
             if ((gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency)
                 || (gInterceptorTxOverrideActive && i == gInterceptorHighlight)) {
