@@ -190,6 +190,16 @@ static void Confirm_Channel_Entry(void)
 
 void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 {
+    // The F key itself has to be explicitly routed to GENERIC_Key_F, same
+    // as every other screen does (app/main.c, app/menu.c, app/fm.c all do
+    // this individually - nothing calls it automatically). Without this,
+    // gWasFKeyPressed never gets armed while viewing this screen, so F+7
+    // would never do anything here at all.
+    if (Key == KEY_F) {
+        GENERIC_Key_F(bKeyPressed, bKeyHeld);
+        return;
+    }
+
     // F+7 toggles sniffing, same as it does from the main screen. Needed
     // here too since this screen has its own key handler entirely separate
     // from app/main.c's - pressing F+7 while already viewing the grid would
