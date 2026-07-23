@@ -135,20 +135,23 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
 
 static void Update_Meter_Level(void) {
     uint16_t rssi = BK4819_GetRSSI();
+    // This only ever runs while genuinely dwelling/receiving, so a 10%
+    // floor here correctly means "RX is active" at all times, even if the
+    // signal is momentarily weak - the remaining 10-100% range reflects
+    // actual strength above that baseline. The previous x3 gain overshot
+    // and pinned to 100% far too easily - reverted to plain linear scaling
+    // underneath the floor instead.
     if (rssi <= METER_RSSI_MIN) {
-        gInterceptorMeterPercent = 0;
+        gInterceptorMeterPercent = 10;
         return;
     }
     uint32_t span = METER_RSSI_FULL - METER_RSSI_MIN;
     uint32_t over = rssi - METER_RSSI_MIN;
-    // Real-world testing showed this never moved below ~30% or above
-    // ~50% - meaning actual signals only ever occupy a narrow middle
-    // slice of the assumed RSSI range. Stretching by 3x here spreads that
-    // same real range across roughly 0-100% instead, same approach as the
-    // TX meter's gain fix - adjust further if it's still not dramatic
-    // enough, or if it now pins to 100% too easily.
-    uint32_t pct  = (over * 100 * 3) / span;
-    gInterceptorMeterPercent = (pct > 100) ? 100 : (uint8_t)pct;
+    uint32_t pct  = (over * 100) / span;
+    if (pct > 100) pct = 100;
+    // Compress 0-100 raw into 10-100, so the 90 points above the floor
+    // reflect actual signal strength.
+    gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
 }
 
 uint8_t INTERCEPTOR_GetUsedPageCount(void) {
@@ -290,7 +293,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 // varies with whatever else the radio is doing.
 // ---------------------------------------------------------------------
 
-#define REPLY_WAIT_10MS_TICKS  450  // ~4.5 seconds
+#define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
 
@@ -386,6 +389,19 @@ static bool Handle_Active_Channel_Dwell(void) {
     }
 
     if (!sWaitingForReply) {
+        if (REPLY_WAIT_10MS_TICKS == 0) {
+            // No wait at all - resume scanning immediately. Handled as a
+            // special case since the countdown-expiry logic below only
+            // fires when it decrements down TO zero; starting already at
+            // zero would never trigger that and get stuck waiting forever.
+            // Callers ignore this function's return value, so the dwell
+            // state has to actually be cleared here directly, matching
+            // exactly what the normal countdown-completion path does.
+            gInterceptorActiveFrequency = 0;
+            INTERCEPTOR_SortByPopularity();
+            gUpdateDisplay = true;
+            return false;
+        }
         sWaitingForReply = true;
         sReplyWaitCountdown = REPLY_WAIT_10MS_TICKS;
         return true;
