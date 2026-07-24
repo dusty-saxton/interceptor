@@ -39,10 +39,10 @@ bool     gInterceptorBandSweepActive = false;
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  "Ham 6m",      false },
     { 14400000, 14800000, "Ham 2m",      false },
-    { 15000000, 17400000, "VHF LandMob", true  },
     { 21900000, 22500000, "Ham 1.25m",   false },
-    { 40600000, 42000000, "UHF Fed",     false },
     { 42000000, 45000000, "Ham 70cm",    false },
+    { 15000000, 17400000, "VHF LandMob", true  },
+    { 40600000, 42000000, "UHF Fed",     false },
     { 45000000, 47000000, "UHF LandMob", true  },
     { 80600000, 82400000, "800 PS",      false },
     { 0,        0,        "Manual",      false },
@@ -52,6 +52,7 @@ uint8_t gBandSelectHighlight = 0;
 bool    gBandSelectEnteringFreq = false;
 uint8_t gBandSelectEnteringWhich = 0;
 bool    gExcludeNoaa = false;
+bool    gSweepNeedsReinit = true; // forces the sweep to (re)initialize from the current selection
 bool     gInterceptorHuntTickerActive = false;
 uint32_t gInterceptorHuntTickerFreq = 0;
 int8_t   gInterceptorFlashSlot = -1;
@@ -339,10 +340,10 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
-#define MAX_DWELL_10MS_TICKS 800   // ~20 seconds - adjust to taste
+#define MAX_DWELL_10MS_TICKS 2000   // ~20 seconds - adjust to taste
 #define NOISE_CHECK_10MS_TICKS 300     // ~3 seconds of samples before judging - unverified starting guess
-#define NOISE_VARIANCE_THRESHOLD 20     // meter range below this over the check window = "flat"
-#define NOISE_LOUD_THRESHOLD 30        // meter max above this = "loud" - flat+quiet could just be a calm voice
+#define NOISE_VARIANCE_THRESHOLD 5     // meter range below this over the check window = "flat"
+#define NOISE_LOUD_THRESHOLD 60        // meter max above this = "loud" - flat+quiet could just be a calm voice
 #define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
 #define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
 
@@ -802,9 +803,16 @@ static void Do_BandSweep_Cycle(void) {
         return;
     }
 
-    if (sSweepFreq == 0) {
+    // Confirming a new selection from the band-select screen sets
+    // gSweepNeedsReinit - without this, the sweep only ever reinitialized
+    // once (when sSweepFreq happened to still be 0), so reconfiguring an
+    // already-running sweep had no real effect until it happened to
+    // naturally wrap back around - which in practice looked like it
+    // required a full power cycle to actually pick up a new selection.
+    if (sSweepFreq == 0 || gSweepNeedsReinit) {
+        gSweepNeedsReinit = false;
         uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
-        if (next == 0xFF) return; // nothing enabled - idle until the selection changes
+        if (next == 0xFF) { sSweepFreq = 0; return; } // nothing enabled - idle until the selection changes
         sSweepBandIndex = next;
         sSweepFreq = gSweepBands[next].StartFreq;
         Skip_Excluded_Ranges(&sSweepFreq);

@@ -75,6 +75,7 @@ extern uint8_t gBandSelectEnteringWhich; // 0 = typing start freq, 1 = typing en
 #define NOAA_EXCLUDE_START 16240000
 #define NOAA_EXCLUDE_END   16255000
 extern bool gExcludeNoaa;
+extern bool gSweepNeedsReinit;
 
 // One extra row beyond the 9 bands, for the NOAA-exclude toggle - shared
 // between the display and key-handling files.

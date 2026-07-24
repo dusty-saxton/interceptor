@@ -46,7 +46,7 @@ void UI_DisplayBandSelect(void)
                  (unsigned int)(gSweepBands[gBandSelectHighlight].EndFreq / 100000),
                  (unsigned int)((gSweepBands[gBandSelectHighlight].EndFreq % 100000) / 100));
     }
-    UI_PrintStringSmallNormal(header, 0, 127, 0);
+    UI_PrintStringSmallNormal(header, 0, 0, 0); // End==Start -> left-aligned, no centering
 
     // Keep the highlighted row always visible, scrolling the window as
     // needed rather than trying to show all rows at once.
@@ -70,7 +70,7 @@ void UI_DisplayBandSelect(void)
                      gSweepBands[idx].Enabled ? "[X]" : "[ ]", gSweepBands[idx].Name);
         }
 
-        UI_PrintStringSmallNormal(line, 0, 127, page);
+        UI_PrintStringSmallNormal(line, 0, 0, page); // End==Start -> left-aligned, no centering
 
         if (idx == gBandSelectHighlight) {
             for (uint8_t col = 0; col < LCD_WIDTH; col++)

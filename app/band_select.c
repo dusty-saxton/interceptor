@@ -91,6 +91,7 @@ void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         }
 
         gSniffingEnabled            = false;
+        gSweepNeedsReinit           = true;
         gInterceptorBandSweepActive = true;
         gInterceptorViewActive      = true;
         gRequestDisplayScreen       = DISPLAY_INTERCEPTOR;
