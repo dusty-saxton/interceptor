@@ -324,7 +324,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define NOISE_VARIANCE_THRESHOLD 20     // meter range below this over the check window = "flat"
 #define NOISE_LOUD_THRESHOLD 30        // meter max above this = "loud" - flat+quiet could just be a calm voice
 #define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
-#define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
+#define NOISE_FLAGS_BEFORE_BLACKLIST 2 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
