@@ -310,9 +310,11 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
+#define MAX_DWELL_10MS_TICKS 2000   // ~20 seconds - adjust to taste
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
+static uint16_t sDwellDurationCountdown = 0;
 
 // Called once per real 10ms system tick from APP_TimeSlice10ms().
 void INTERCEPTOR_TimeSlice10ms(void) {
@@ -320,6 +322,34 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         sGridCheckState.settleCountdown--;
     if (sSweepCheckState.state == CANDCHECK_WAITING && sSweepCheckState.settleCountdown > 0)
         sSweepCheckState.settleCountdown--;
+
+    // Maximum dwell time - some channels (NOAA weather radio, constant
+    // noise/interference) never actually stop transmitting, which would
+    // otherwise hang the scan on that one frequency forever, with no way
+    // to find or save anything else. After this cap, force-resume scanning
+    // regardless of continued activity. The channel stays saved either way
+    // - it'll get re-detected and dwelled on again naturally next time it
+    // comes up in rotation, which is the right behavior for something
+    // that's legitimately busy rather than needing to be blacklisted.
+    {
+        static bool sWasDwelling = false;
+        if (gInterceptorActiveFrequency != 0) {
+            if (!sWasDwelling) {
+                sDwellDurationCountdown = MAX_DWELL_10MS_TICKS;
+                sWasDwelling = true;
+            } else if (sDwellDurationCountdown > 0) {
+                sDwellDurationCountdown--;
+                if (sDwellDurationCountdown == 0) {
+                    gInterceptorActiveFrequency = 0;
+                    sWaitingForReply = false;
+                    INTERCEPTOR_SortByPopularity();
+                    gUpdateDisplay = true;
+                }
+            }
+        } else {
+            sWasDwelling = false;
+        }
+    }
 
     if (sWaitingForReply && sReplyWaitCountdown > 0) {
         sReplyWaitCountdown--;
