@@ -53,14 +53,28 @@ static void Confirm_Manual_Digit_Entry(void)
         gSweepBands[SWEEP_MANUAL_BAND_INDEX].StartFreq = 0;
         gSweepBands[SWEEP_MANUAL_BAND_INDEX].EndFreq    = 0;
         gSweepBands[SWEEP_MANUAL_BAND_INDEX].Enabled    = false;
+        gBandSelectEnteringFreq = false;
+        gInputBoxIndex = 0;
         gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
-    } else {
-        gSweepBands[SWEEP_MANUAL_BAND_INDEX].EndFreq = endFreq;
-        gSweepBands[SWEEP_MANUAL_BAND_INDEX].Enabled = true; // auto-enable once configured
-        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+        gUpdateDisplay = true;
+        return;
     }
-    gBandSelectEnteringFreq = false;
+
+    gSweepBands[SWEEP_MANUAL_BAND_INDEX].EndFreq = endFreq;
+    // Range alone isn't complete without a step size - move on to that
+    // instead of finishing here.
+    gBandSelectEnteringWhich = 2;
     gInputBoxIndex = 0;
+    gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+    gUpdateDisplay = true;
+}
+
+static void Confirm_Step_Selection(void)
+{
+    gSweepBands[SWEEP_MANUAL_BAND_INDEX].StepSize = gStepOptions[gBandSelectStepOptionIndex];
+    gSweepBands[SWEEP_MANUAL_BAND_INDEX].Enabled = true; // auto-enable now that it's fully configured
+    gBandSelectEnteringFreq = false;
+    gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
     gUpdateDisplay = true;
 }
 
@@ -120,6 +134,32 @@ void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 
     // --- Typing a manual frequency ---
     if (gBandSelectEnteringFreq) {
+        if (gBandSelectEnteringWhich == 2) {
+            // Step-selection stage - scroll through standard step sizes
+            // instead of typing digits, since several of them (6.25kHz,
+            // 12.5kHz) are fractional and awkward to type directly.
+            if (Key == KEY_UP) {
+                gBandSelectStepOptionIndex = (gBandSelectStepOptionIndex == 0)
+                    ? (STEP_OPTION_COUNT - 1) : (gBandSelectStepOptionIndex - 1);
+                gUpdateDisplay = true;
+                return;
+            }
+            if (Key == KEY_DOWN) {
+                gBandSelectStepOptionIndex = (gBandSelectStepOptionIndex + 1) % STEP_OPTION_COUNT;
+                gUpdateDisplay = true;
+                return;
+            }
+            if (Key == KEY_MENU) {
+                Confirm_Step_Selection();
+                return;
+            }
+            if (Key == KEY_EXIT) {
+                Cancel_Manual_Entry();
+                return;
+            }
+            return; // ignore anything else while selecting
+        }
+
         if (Key <= KEY_9) {
             if (gInputBoxIndex < 6) {
                 INPUTBOX_Append(Key);

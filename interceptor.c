@@ -37,20 +37,22 @@ bool     gInterceptorBandSweepActive = false;
 // fixed behavior before band selection existed - so anyone who never
 // touches the new selection screen gets the same sweep as before.
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
-    { 5000000,  5400000,  "Ham 6m",      false },
-    { 14400000, 14800000, "Ham 2m",      false },
-    { 21900000, 22500000, "Ham 1.25m",   false },
-    { 42000000, 45000000, "Ham 70cm",    false },
-    { 15000000, 17400000, "VHF LandMob", true  },
-    { 40600000, 42000000, "UHF Fed",     false },
-    { 45000000, 47000000, "UHF LandMob", true  },
-    { 80600000, 82400000, "800 PS",      false },
-    { 0,        0,        "Manual",      false },
+    { 5000000,  5400000,  500,  "Ham 6m",      false },
+    { 14400000, 14800000, 500,  "Ham 2m",      false },
+    { 21900000, 22500000, 500,  "Ham 1.25m",   false },
+    { 42000000, 45000000, 1250, "Ham 70cm",    false },
+    { 15000000, 17400000, 500,  "VHF LandMob", true  },
+    { 40600000, 42000000, 625,  "UHF Fed",     false },
+    { 45000000, 47000000, 625,  "UHF LandMob", true  },
+    { 80600000, 82400000, 1250, "800 PS",      false },
+    { 0,        0,        1250, "Manual",      false },
 };
 
 uint8_t gBandSelectHighlight = 0;
 bool    gBandSelectEnteringFreq = false;
 uint8_t gBandSelectEnteringWhich = 0;
+uint8_t gBandSelectStepOptionIndex = 4; // starts on 12.5kHz (index 4) - a reasonable general default
+const uint32_t gStepOptions[STEP_OPTION_COUNT] = { 250, 500, 625, 1000, 1250, 2000, 2500 };
 bool    gExcludeNoaa = false;
 bool    gInterceptorPendingBlacklistBuzz = false; // played once gCurrentFunction actually leaves FUNCTION_RECEIVE
 bool    gSweepNeedsReinit = true; // forces the sweep to (re)initialize from the current selection
@@ -838,13 +840,11 @@ static void Do_FastGridScan_Cycle(void) {
 // to confirm and start). Uses the same real gRxVfo-based check as
 // grid-check/fast-scan, so it correctly dwells and lets you actually hear
 // what it finds instead of silently logging and moving on.
+// Each band now carries its own StepSize (see gSweepBands) instead of one
+// fixed value for everything - real channel spacing genuinely differs by
+// band, and a single fixed step was systematically missing channels that
+// don't happen to land on it.
 // ---------------------------------------------------------------------
-
-// 12.5 kHz, not 25 kHz - confirmed via FCC.gov: since Jan 1 2013, Part 90
-// licensees in most of these bands are required to operate at 12.5kHz
-// efficiency. A 25kHz step would silently skip roughly half of all real,
-// legally-operating channels - not slower, genuinely never tested at all.
-#define SWEEP_STEP_SIZE  1250
 
 // Finds the next enabled, valid band after the given index, wrapping
 // around the whole list. Returns 0xFF if nothing is currently enabled.
@@ -861,9 +861,9 @@ static uint8_t Find_Next_Enabled_Band(uint8_t afterIdx) {
 // now, structured so more could be added later). Called both when a band
 // is first entered and after every step, since either could land inside
 // an excluded range.
-static void Skip_Excluded_Ranges(uint32_t *freq) {
+static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
     if (gExcludeNoaa && *freq >= NOAA_EXCLUDE_START && *freq <= NOAA_EXCLUDE_END) {
-        *freq = NOAA_EXCLUDE_END + SWEEP_STEP_SIZE;
+        *freq = NOAA_EXCLUDE_END + stepSize;
     }
 }
 
@@ -889,7 +889,7 @@ static void Do_BandSweep_Cycle(void) {
         if (next == 0xFF) { sSweepFreq = 0; return; } // nothing enabled - idle until the selection changes
         sSweepBandIndex = next;
         sSweepFreq = gSweepBands[next].StartFreq;
-        Skip_Excluded_Ranges(&sSweepFreq);
+        Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
     }
 
     gInterceptorHuntTickerActive = true;
@@ -916,8 +916,8 @@ static void Do_BandSweep_Cycle(void) {
         }
     }
 
-    sSweepFreq += SWEEP_STEP_SIZE;
-    Skip_Excluded_Ranges(&sSweepFreq);
+    sSweepFreq += gSweepBands[sSweepBandIndex].StepSize;
+    Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[sSweepBandIndex].StepSize);
 
     if (sSweepFreq > gSweepBands[sSweepBandIndex].EndFreq) {
         uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
@@ -927,7 +927,7 @@ static void Do_BandSweep_Cycle(void) {
         }
         sSweepBandIndex = next;
         sSweepFreq = gSweepBands[next].StartFreq;
-        Skip_Excluded_Ranges(&sSweepFreq);
+        Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
     }
 }
 

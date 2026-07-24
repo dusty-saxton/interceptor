@@ -58,6 +58,10 @@ extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checke
 typedef struct {
     uint32_t StartFreq; // 10Hz units, same convention as everything else here
     uint32_t EndFreq;
+    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band, a single
+                        // fixed step was systematically missing channels that don't
+                        // happen to land on it (confirmed: 146.720 MHz, 5kHz-aligned,
+                        // was never reachable on a 12.5kHz grid starting elsewhere)
     char     Name[12];
     bool     Enabled;   // currently checked for sweeping
 } SweepBand_t;
@@ -67,7 +71,14 @@ extern SweepBand_t gSweepBands[SWEEP_BAND_COUNT];
 // Navigation/state for the band-selection screen itself.
 extern uint8_t gBandSelectHighlight;     // which row is highlighted
 extern bool    gBandSelectEnteringFreq;  // true while typing the Manual band's frequencies
-extern uint8_t gBandSelectEnteringWhich; // 0 = typing start freq, 1 = typing end freq
+extern uint8_t gBandSelectEnteringWhich; // 0 = typing start freq, 1 = typing end freq, 2 = selecting step size
+extern uint8_t gBandSelectStepOptionIndex; // which entry in the standard step-size list is highlighted
+
+// Standard step sizes offered for the Manual band, in 10Hz units:
+// 2.5, 5, 6.25, 10, 12.5, 20, 25 kHz - covers the same real conventions
+// used across the preset bands.
+#define STEP_OPTION_COUNT 7
+extern const uint32_t gStepOptions[STEP_OPTION_COUNT];
 
 // Exclude NOAA weather channels (162.400-162.550 MHz, the 7 real NOAA
 // channels) from any sweep that would otherwise cover them - independent

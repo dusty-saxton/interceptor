@@ -28,12 +28,18 @@ void UI_DisplayBandSelect(void)
     // this font size, while still surfacing the range somewhere.
     char header[BAND_SELECT_MAX_LINE_LEN + 1];
     if (gBandSelectEnteringFreq) {
-        const char *typed = INPUTBOX_GetAscii();
-        char echo[7] = "______";
-        for (uint8_t d = 0; d < gInputBoxIndex && d < 6; d++)
-            echo[d] = typed[d];
-        snprintf(header, sizeof(header), "%s %.3s.%.3s",
-                 gBandSelectEnteringWhich == 0 ? "Start" : "End  ", echo, echo + 3);
+        if (gBandSelectEnteringWhich == 2) {
+            uint32_t step = gStepOptions[gBandSelectStepOptionIndex];
+            snprintf(header, sizeof(header), "Step %u.%03ukHz",
+                     (unsigned int)(step / 100), (unsigned int)((step % 100) * 10));
+        } else {
+            const char *typed = INPUTBOX_GetAscii();
+            char echo[7] = "______";
+            for (uint8_t d = 0; d < gInputBoxIndex && d < 6; d++)
+                echo[d] = typed[d];
+            snprintf(header, sizeof(header), "%s %.3s.%.3s",
+                     gBandSelectEnteringWhich == 0 ? "Start" : "End  ", echo, echo + 3);
+        }
     } else if (gBandSelectHighlight == BAND_SELECT_NOAA_ROW) {
         snprintf(header, sizeof(header), "162.400-162.550");
     } else if (gBandSelectHighlight == SWEEP_MANUAL_BAND_INDEX
