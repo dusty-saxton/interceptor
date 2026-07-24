@@ -10,11 +10,43 @@
 // leaving the rest for a scrolling window of band rows.
 #define BAND_SELECT_VISIBLE_ROWS (FRAME_LINES - 1)
 
+// This font is 6px wide + 1px spacing = 7px/char. UI_PrintStringSmallNormal
+// centers text using unsigned arithmetic that UNDERFLOWS if the string is
+// wider than the available space (confirmed in ui/helper.c) - it does not
+// clamp or truncate on its own. 128px / 7px = ~18.3, so every string handed
+// to it here MUST stay at or under 18 characters, confirmed with the exact
+// math, not just "should be fine." This was a real, serious bug before -
+// rows previously reached 31 characters here.
+#define BAND_SELECT_MAX_LINE_LEN 18
+
 void UI_DisplayBandSelect(void)
 {
     memset(gFrameBuffer, 0, sizeof(gFrameBuffer));
 
-    UI_PrintStringSmallNormal("Bands: MENU=on/off F5=Go", 0, 127, 0);
+    // Header shows the highlighted row's frequency range instead of static
+    // instructions - keeps every individual row short enough to be safe at
+    // this font size, while still surfacing the range somewhere.
+    char header[BAND_SELECT_MAX_LINE_LEN + 1];
+    if (gBandSelectEnteringFreq) {
+        const char *typed = INPUTBOX_GetAscii();
+        char echo[7] = "______";
+        for (uint8_t d = 0; d < gInputBoxIndex && d < 6; d++)
+            echo[d] = typed[d];
+        snprintf(header, sizeof(header), "%s %.3s.%.3s",
+                 gBandSelectEnteringWhich == 0 ? "Start" : "End  ", echo, echo + 3);
+    } else if (gBandSelectHighlight == BAND_SELECT_NOAA_ROW) {
+        snprintf(header, sizeof(header), "162.400-162.550");
+    } else if (gBandSelectHighlight == SWEEP_MANUAL_BAND_INDEX
+               && gSweepBands[SWEEP_MANUAL_BAND_INDEX].EndFreq == 0) {
+        snprintf(header, sizeof(header), "Not configured");
+    } else {
+        snprintf(header, sizeof(header), "%u.%03u-%u.%03u",
+                 (unsigned int)(gSweepBands[gBandSelectHighlight].StartFreq / 100000),
+                 (unsigned int)((gSweepBands[gBandSelectHighlight].StartFreq % 100000) / 100),
+                 (unsigned int)(gSweepBands[gBandSelectHighlight].EndFreq / 100000),
+                 (unsigned int)((gSweepBands[gBandSelectHighlight].EndFreq % 100000) / 100));
+    }
+    UI_PrintStringSmallNormal(header, 0, 127, 0);
 
     // Keep the highlighted row always visible, scrolling the window as
     // needed rather than trying to show all rows at once.
@@ -27,31 +59,15 @@ void UI_DisplayBandSelect(void)
         if (idx >= BAND_SELECT_TOTAL_ROWS) break;
 
         uint8_t page = 1 + row;
-        char line[26];
+        char line[BAND_SELECT_MAX_LINE_LEN + 1];
 
+        // Just checkbox + name on every row now - the frequency range
+        // lives in the header instead, keeping every row short and safe.
         if (idx == BAND_SELECT_NOAA_ROW) {
-            sprintf(line, "%s Exclude NOAA (162.4-162.55)", gExcludeNoaa ? "[X]" : "[ ]");
-        } else if (gBandSelectEnteringFreq && idx == SWEEP_MANUAL_BAND_INDEX) {
-            // Live digit echo while typing - 6 digits total, first 3 are
-            // whole MHz, last 3 are thousandths (e.g. "146720" = 146.720).
-            const char *typed = INPUTBOX_GetAscii();
-            char echo[7] = "______";
-            for (uint8_t d = 0; d < gInputBoxIndex && d < 6; d++)
-                echo[d] = typed[d];
-            sprintf(line, "%s %.3s.%.3s MHz",
-                    gBandSelectEnteringWhich == 0 ? "Start" : "End  ",
-                    echo, echo + 3);
+            snprintf(line, sizeof(line), "%s Exclude NOAA", gExcludeNoaa ? "[X]" : "[ ]");
         } else {
-            const char *box = gSweepBands[idx].Enabled ? "[X]" : "[ ]";
-            if (idx == SWEEP_MANUAL_BAND_INDEX && gSweepBands[idx].EndFreq == 0) {
-                sprintf(line, "%s %s (not set)", box, gSweepBands[idx].Name);
-            } else {
-                sprintf(line, "%s %s %u.%03u-%u.%03u", box, gSweepBands[idx].Name,
-                        (unsigned int)(gSweepBands[idx].StartFreq / 100000),
-                        (unsigned int)((gSweepBands[idx].StartFreq % 100000) / 100),
-                        (unsigned int)(gSweepBands[idx].EndFreq / 100000),
-                        (unsigned int)((gSweepBands[idx].EndFreq % 100000) / 100));
-            }
+            snprintf(line, sizeof(line), "%s %s",
+                     gSweepBands[idx].Enabled ? "[X]" : "[ ]", gSweepBands[idx].Name);
         }
 
         UI_PrintStringSmallNormal(line, 0, 127, page);

@@ -47,6 +47,23 @@ extern int16_t  gInterceptorCheckingSlot;
 // edge bits) - used to lift cell text off the exact bottom edge by a
 // couple pixels, since UI_PrintStringSmallBold has no sub-page positioning
 // of its own.
+// UI_PrintStringSmallBold centers text using unsigned arithmetic that
+// UNDERFLOWS (confirmed in ui/helper.c) if the string is wider than the
+// available (x, xEnd) space - it does not clamp or truncate on its own.
+// Several of our own strings (CTCSS tone display especially, e.g.
+// "254.1Hz" at 7 characters) can exceed a single grid cell's ~41px width
+// at this font's 7px/char spacing (max ~5 safe characters) - this was a
+// real, confirmed memory-corruption risk, not a theoretical one. Truncates
+// defensively in place before calling through.
+static void Safe_PrintStringSmallBold(char *str, uint8_t x, uint8_t xEnd, uint8_t page)
+{
+    uint8_t avail = (xEnd >= x) ? (xEnd - x) : 0;
+    uint8_t maxChars = avail / 7; // 6px glyph + 1px spacing
+    if (strlen(str) > maxChars)
+        str[maxChars] = '\0';
+    UI_PrintStringSmallBold(str, x, xEnd, page);
+}
+
 static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
 {
     if (page >= FRAME_LINES) return;
@@ -167,7 +184,7 @@ void UI_DisplayInterceptorGridPage(void)
                     echo[d] = typed[d];
                 sprintf(box_out, "%s", echo);
             }
-            UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
@@ -176,7 +193,7 @@ void UI_DisplayInterceptorGridPage(void)
         if (idx == offset + gInterceptorHighlight && gInterceptorNameEditIndex >= 0) {
             strncpy(box_out, gInterceptorNameBuf, 6);
             box_out[6] = '\0';
-            UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
@@ -189,7 +206,7 @@ void UI_DisplayInterceptorGridPage(void)
             sprintf(box_out, "%3u.%02u",
                     (unsigned int)(raw_f / 100000),
                     (unsigned int)((raw_f % 100000) / 1000));
-            UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             if (i == gInterceptorHighlight) {
                 UI_DrawSelectionBox(page, x, xEnd);
@@ -224,7 +241,7 @@ void UI_DisplayInterceptorGridPage(void)
                         (unsigned int)((raw_f % 100000) / 1000));
             }
 
-            UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
 
             if ((gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency)
