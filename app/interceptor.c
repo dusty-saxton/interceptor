@@ -331,7 +331,7 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         if (!bKeyPressed) {
             uint16_t idx = CurrentSlotIndex();
             if (bKeyHeld) {
-                INTERCEPTOR_DeleteAndBlacklist(idx);
+                INTERCEPTOR_DeleteAndBlacklist(idx, true);
             } else {
                 INTERCEPTOR_DeleteOnly(idx);
             }
