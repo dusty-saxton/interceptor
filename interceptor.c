@@ -55,7 +55,14 @@ int16_t  gInterceptorCheckingSlot = -1; // -1 = nothing currently being checked
 // How long to wait after retuning before trusting FUNCTION_INCOMING as a
 // real result - matches this firmware's own real scanner pacing
 // (scan_pause_delay_in_6_10ms = 100ms), not an arbitrary guess.
-#define CANDIDATE_SETTLE_10MS_TICKS  10
+// Doubled from the original 100ms - the real squelch decision (especially
+// CTCSS tone verification, which needs several full cycles of a
+// low-frequency tone to reliably decode) can genuinely take longer than
+// that. Real-world testing showed the hardware's own RX LED lighting up
+// on a channel that our check still reported as inactive - a strong sign
+// we were checking the result before the real squelch decision had
+// actually finished, not that the signal wasn't there.
+#define CANDIDATE_SETTLE_10MS_TICKS  20
 
 enum { CANDCHECK_IDLE, CANDCHECK_WAITING };
 

@@ -71,7 +71,7 @@ static void Begin_Interceptor_PTT(void)
     // verified firmware function compute the correct power calibration for
     // that band - never left stale from whatever the previous VFO had
     sInterceptorTxVfo.Band         = FREQUENCY_GetBand(gScanList[idx].Frequency);
-    sInterceptorTxVfo.OUTPUT_POWER = OUTPUT_POWER_LOW; // always Low, by design
+    sInterceptorTxVfo.OUTPUT_POWER = OUTPUT_POWER_HIGH; // changed from Low - Low was too weak
 
     RADIO_ConfigureSquelchAndOutputPower(&sInterceptorTxVfo);
 
