@@ -45,4 +45,40 @@ extern uint8_t  gInterceptorFlashCount;  // remaining flash toggles
 // briefly while a specific saved cell is actively being tested.
 extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
 
+// --- Band selection for F+5 sweep ---
+// Presets grounded in real US allocations, kept within the BK4819's actual
+// tunable range (18-630MHz and 760-1300MHz, confirmed in frequencies.c -
+// there's a hard gap 630-760MHz that can't be tuned into at all). Slot 8 is
+// user-configurable "Manual" - StartFreq/EndFreq both 0 means it hasn't
+// been set yet.
+#define SWEEP_BAND_COUNT 9
+#define SWEEP_MANUAL_BAND_INDEX 8
+
+typedef struct {
+    uint32_t StartFreq; // 10Hz units, same convention as everything else here
+    uint32_t EndFreq;
+    char     Name[12];
+    bool     Enabled;   // currently checked for sweeping
+} SweepBand_t;
+
+extern SweepBand_t gSweepBands[SWEEP_BAND_COUNT];
+
+// Navigation/state for the band-selection screen itself.
+extern uint8_t gBandSelectHighlight;     // which row is highlighted
+extern bool    gBandSelectEnteringFreq;  // true while typing the Manual band's frequencies
+extern uint8_t gBandSelectEnteringWhich; // 0 = typing start freq, 1 = typing end freq
+
+// Exclude NOAA weather channels (162.400-162.550 MHz, the 7 real NOAA
+// channels) from any sweep that would otherwise cover them - independent
+// of which preset band contains that range, so it works whether it's
+// inside VHF Land Mobile or a custom Manual range that happens to overlap.
+#define NOAA_EXCLUDE_START 16240000
+#define NOAA_EXCLUDE_END   16255000
+extern bool gExcludeNoaa;
+
+// One extra row beyond the 9 bands, for the NOAA-exclude toggle - shared
+// between the display and key-handling files.
+#define BAND_SELECT_TOTAL_ROWS (SWEEP_BAND_COUNT + 1)
+#define BAND_SELECT_NOAA_ROW SWEEP_BAND_COUNT
+
 #endif

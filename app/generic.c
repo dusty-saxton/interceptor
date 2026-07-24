@@ -58,10 +58,10 @@ void GENERIC_Key_F(bool bKeyPressed, bool bKeyHeld)
 		}
 		else { // released
 #ifdef ENABLE_FMRADIO
-			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+			if ((gFmRadioMode || gScreenToDisplay != DISPLAY_MAIN) && gScreenToDisplay != DISPLAY_FM && gScreenToDisplay != DISPLAY_INTERCEPTOR && gScreenToDisplay != DISPLAY_BAND_SELECT)
 				return;
 #else
-			if (gScreenToDisplay != DISPLAY_MAIN && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+			if (gScreenToDisplay != DISPLAY_MAIN && gScreenToDisplay != DISPLAY_INTERCEPTOR && gScreenToDisplay != DISPLAY_BAND_SELECT)
 				return;
 #endif
 
@@ -123,7 +123,7 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 #endif
 			RADIO_SetVfoState(VFO_STATE_NORMAL);
 
-			if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+			if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR && gScreenToDisplay != DISPLAY_BAND_SELECT)
 				gRequestDisplayScreen = DISPLAY_MAIN;
 		}
 
@@ -166,7 +166,7 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 		return;
 	}
 
-	if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR)
+	if (gScreenToDisplay != DISPLAY_MENU && gScreenToDisplay != DISPLAY_INTERCEPTOR && gScreenToDisplay != DISPLAY_BAND_SELECT)
 		gRequestDisplayScreen = DISPLAY_MAIN;
 
 
@@ -214,6 +214,7 @@ done:
 	gPttDebounceCounter = 0;
 	if (gScreenToDisplay != DISPLAY_MENU
 		&& gScreenToDisplay != DISPLAY_INTERCEPTOR
+		&& gScreenToDisplay != DISPLAY_BAND_SELECT
 #ifdef ENABLE_FMRADIO
 		&& gRequestDisplayScreen != DISPLAY_FM
 #endif

@@ -59,6 +59,7 @@ void (*UI_DisplayFunctions[])(void) = {
 	[DISPLAY_AIRCOPY] = &UI_DisplayAircopy,
 #endif
 	[DISPLAY_INTERCEPTOR] = &UI_DisplayInterceptorGridPage,
+	[DISPLAY_BAND_SELECT] = &UI_DisplayBandSelect,
 };
 
 static_assert(ARRAY_SIZE(UI_DisplayFunctions) == DISPLAY_N_ELEM);

@@ -93,6 +93,7 @@ void (*ProcessKeysFunctions[])(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) 
 	[DISPLAY_AIRCOPY] = &AIRCOPY_ProcessKeys,
 #endif
 	[DISPLAY_INTERCEPTOR] = &INTERCEPTOR_ProcessKeys,
+	[DISPLAY_BAND_SELECT] = &BAND_SELECT_ProcessKeys,
 };
 
 static_assert(ARRAY_SIZE(ProcessKeysFunctions) == DISPLAY_N_ELEM);

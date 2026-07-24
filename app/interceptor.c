@@ -21,6 +21,8 @@ char    gInterceptorNameBuf[7] = {0};
 // True while typing a 3-digit memory channel number to add to the grid.
 // Shared (not static) so ui/interceptor.c can show live digit echo.
 bool gInterceptorEnteringChannel = false;
+uint16_t gInterceptorPreviewChannel = 0; // scroll-preview channel while adding via UP/DOWN instead of typing
+bool     gInterceptorScrollPreviewActive = false; // true only once UP/DOWN has actually been pressed - default view is blank, ready to type
 
 static uint16_t CurrentSlotIndex(void) {
     return (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
@@ -188,36 +190,67 @@ static void Cycle_Name_Character(int8_t direction)
     gUpdateDisplay = true;
 }
 
+// Finds the next valid channel in the given direction, wrapping around
+// 0-199. Bounded so it can't spin forever if somehow nothing is valid -
+// in that case just returns the starting value unchanged.
+static uint16_t Find_Next_Valid_Channel(uint16_t start, int8_t direction)
+{
+    uint16_t idx = start;
+    for (uint16_t tries = 0; tries < 200; tries++) {
+        int16_t next = (int16_t)idx + direction;
+        if (next < 0) next = 199;
+        if (next >= 200) next = 0;
+        idx = (uint16_t)next;
+        if (RADIO_CheckValidChannel(idx, false, 0)) return idx;
+    }
+    return start;
+}
+
 static void Begin_Channel_Entry(void)
 {
     gInterceptorEnteringChannel = true;
     gInputBoxIndex = 0;
+    gInterceptorScrollPreviewActive = false; // default view is blank, ready to type immediately
+    // Pre-compute the first valid channel so it's ready the instant UP/DOWN
+    // is actually pressed, without needing to search at that moment.
+    gInterceptorPreviewChannel = Find_Next_Valid_Channel(199, 1);
     gUpdateDisplay = true;
 }
 
 // Reads the 3 typed digits as a 1-based channel number (001-200, matching
 // how this firmware's own MR channel entry works), validates it, and if
 // valid, pulls that channel's frequency and saved name straight from
-// memory into the current grid slot.
+// memory into the current grid slot. If no digits were typed at all,
+// uses whichever channel was scrolled to with UP/DOWN instead.
 static void Confirm_Channel_Entry(void)
 {
     gInterceptorEnteringChannel = false;
+    uint16_t channel;
 
-    if (gInputBoxIndex != 3) {
+    if (gInterceptorScrollPreviewActive && gInputBoxIndex == 0) {
+        // Scroll-preview method - already validated by construction, but
+        // double-check anyway before trusting it.
+        channel = gInterceptorPreviewChannel;
+        if (!RADIO_CheckValidChannel(channel, false, 0)) {
+            gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
+            gUpdateDisplay = true;
+            return;
+        }
+    } else if (gInputBoxIndex == 3) {
+        const char *typed = INPUTBOX_GetAscii();
+        channel = (uint16_t)((typed[0] - '0') * 100 + (typed[1] - '0') * 10 + (typed[2] - '0')) - 1;
+        gInputBoxIndex = 0;
+
+        if (!RADIO_CheckValidChannel(channel, false, 0)) {
+            gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
+            gUpdateDisplay = true;
+            return; // not a channel that's actually in use
+        }
+    } else {
         gInputBoxIndex = 0;
         gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
         gUpdateDisplay = true;
-        return; // need exactly 3 digits
-    }
-
-    const char *typed = INPUTBOX_GetAscii();
-    uint16_t channel = (uint16_t)((typed[0] - '0') * 100 + (typed[1] - '0') * 10 + (typed[2] - '0')) - 1;
-    gInputBoxIndex = 0;
-
-    if (!RADIO_CheckValidChannel(channel, false, 0)) {
-        gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL;
-        gUpdateDisplay = true;
-        return; // not a channel that's actually in use
+        return; // partial digits typed, neither complete nor empty
     }
 
     uint16_t idx = CurrentSlotIndex();
@@ -270,11 +303,9 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         gWasFKeyPressed = false;
         gUpdateStatus   = true;
 
-        gSniffingEnabled = false; // mutually exclusive with regular sniffing
-        gInterceptorBandSweepActive = !gInterceptorBandSweepActive;
-
-        gInterceptorViewActive = true;
-        gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
+        // Opens the band-selection screen to reconfigure, instead of
+        // directly toggling - F+5 again from there confirms and starts.
+        gRequestDisplayScreen = DISPLAY_BAND_SELECT;
         gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
         gUpdateDisplay = true;
         return;
@@ -284,7 +315,7 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // missing - short-press UP/DOWN was already used for moving the cursor
     // within a page, but nothing at all navigated between pages, so any
     // slot past the first 9 was genuinely unreachable.
-    if ((Key == KEY_UP || Key == KEY_DOWN) && bKeyHeld) {
+    if ((Key == KEY_UP || Key == KEY_DOWN) && bKeyHeld && gInterceptorNameEditIndex < 0) {
         if (!bKeyPressed) {
             Change_Grid_Page(Key == KEY_UP ? -1 : 1);
         }
@@ -356,7 +387,17 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 
     // --- Typing a channel number for a manual add ---
     if (gInterceptorEnteringChannel) {
+        if (Key == KEY_UP || Key == KEY_DOWN) {
+            // Scroll-preview method - abandons any partially-typed digits,
+            // since the two input methods don't mix.
+            gInputBoxIndex = 0;
+            gInterceptorScrollPreviewActive = true;
+            gInterceptorPreviewChannel = Find_Next_Valid_Channel(gInterceptorPreviewChannel, Key == KEY_UP ? -1 : 1);
+            gUpdateDisplay = true;
+            return;
+        }
         if (Key <= KEY_9) {
+            gInterceptorScrollPreviewActive = false; // typing a digit reverts back to digit-entry view
             if (gInputBoxIndex < 3) {
                 INPUTBOX_Append(Key);
                 gUpdateDisplay = true;

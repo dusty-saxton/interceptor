@@ -191,10 +191,11 @@ static void processFKeyFunction(const KEY_Code_t Key, const bool beep)
 
 		case KEY_5:
 			if(beep) {
-				gSniffingEnabled = false; // mutually exclusive with regular sniffing
-				gInterceptorBandSweepActive = !gInterceptorBandSweepActive;
+				// Now opens the band-selection screen instead of directly
+				// toggling sweep - F+5 again from there confirms and
+				// actually starts it.
 				gInterceptorViewActive = true;
-				gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
+				gRequestDisplayScreen  = DISPLAY_BAND_SELECT;
 			}
 			else {
 #ifdef ENABLE_VOX

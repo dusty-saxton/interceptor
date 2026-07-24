@@ -4,6 +4,7 @@
 #include "ui/helper.h"
 #include "ui/inputbox.h"
 #include "dcs.h"
+#include "settings.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -12,6 +13,8 @@ extern uint8_t gInterceptorHighlight;
 extern int8_t  gInterceptorNameEditIndex; // -1 = not editing
 extern char    gInterceptorNameBuf[7];
 extern bool    gInterceptorEnteringChannel;
+extern uint16_t gInterceptorPreviewChannel;
+extern bool     gInterceptorScrollPreviewActive;
 extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
 extern bool     gInterceptorTxOverrideActive;
@@ -143,11 +146,27 @@ void UI_DisplayInterceptorGridPage(void)
         char box_out[16];
 
         if (idx == offset + gInterceptorHighlight && gInterceptorEnteringChannel) {
-            const char *typed = INPUTBOX_GetAscii();
-            char echo[4] = "___";
-            for (uint8_t d = 0; d < gInputBoxIndex && d < 3; d++)
-                echo[d] = typed[d];
-            sprintf(box_out, "%s", echo);
+            if (gInterceptorScrollPreviewActive && gInputBoxIndex == 0) {
+                // Scroll-preview method - show the real channel's saved
+                // name (or frequency, if it has none) as a live preview.
+                char previewName[7] = {0};
+                SETTINGS_FetchChannelName(previewName, (int)gInterceptorPreviewChannel);
+                if (previewName[0] != '\0') {
+                    strncpy(box_out, previewName, 6);
+                    box_out[6] = '\0';
+                } else {
+                    uint32_t raw_f = SETTINGS_FetchChannelFrequency((int)gInterceptorPreviewChannel);
+                    sprintf(box_out, "%3u.%02u",
+                            (unsigned int)(raw_f / 100000),
+                            (unsigned int)((raw_f % 100000) / 1000));
+                }
+            } else {
+                const char *typed = INPUTBOX_GetAscii();
+                char echo[4] = "___";
+                for (uint8_t d = 0; d < gInputBoxIndex && d < 3; d++)
+                    echo[d] = typed[d];
+                sprintf(box_out, "%s", echo);
+            }
             UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             UI_DrawSelectionBox(page, x, xEnd);

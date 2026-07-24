@@ -1,4 +1,3 @@
-
 # compile options (see README.md for descriptions)
 # 0 = disable
 # 1 = enable
@@ -13,7 +12,7 @@ ENABLE_VOX                    ?= 1
 ENABLE_ALARM                  ?= 0
 ENABLE_TX1750                 ?= 0
 ENABLE_PWRON_PASSWORD         ?= 0
-ENABLE_DTMF_CALLING           ?= 1
+ENABLE_DTMF_CALLING           ?= 0
 ENABLE_FLASHLIGHT             ?= 1
 
 # ---- CUSTOM MODS ----
@@ -126,6 +125,8 @@ OBJS += app/generic.o
 OBJS += interceptor.o
 OBJS += ui/interceptor.o
 OBJS += app/interceptor.o
+OBJS += ui/band_select.o
+OBJS += app/band_select.o
 OBJS += syscalls.o
 OBJS += app/main.o
 OBJS += app/menu.o
