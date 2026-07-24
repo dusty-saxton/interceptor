@@ -32,6 +32,7 @@ void INTERCEPTOR_SortByPopularity(void);
 // Returns how many pages currently have at least one populated slot
 // (always at least 1).
 uint8_t INTERCEPTOR_GetUsedPageCount(void);
+uint8_t INTERCEPTOR_GetReachablePageCount(void);
 
 // The grid screen's display function (ui/interceptor.c) and key handler
 // (app/interceptor.c) - registered in ui/ui.c and app/app.c respectively.

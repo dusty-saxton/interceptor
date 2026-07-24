@@ -105,7 +105,7 @@ void UI_DisplayInterceptorGridPage(void)
     // look wrong). The page indicator is deliberately just the current page
     // number (no "total pages", no slash) to leave room for the full mode word.
     char status_str[24];
-    uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
+    uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
 
     if (gInterceptorBandSweepActive) {
         sprintf(status_str, "SCAN ON P%u/%u", gCurrentGridPage + 1, totalPages);

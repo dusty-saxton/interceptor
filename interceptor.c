@@ -176,6 +176,15 @@ uint8_t INTERCEPTOR_GetUsedPageCount(void) {
     return 1; // always show at least page 1, even if empty
 }
 
+// One page ahead of actual content - so there's always a next, empty page
+// ready to navigate into and add to, rather than only becoming reachable
+// once something has already been captured into it.
+uint8_t INTERCEPTOR_GetReachablePageCount(void) {
+    uint8_t used = INTERCEPTOR_GetUsedPageCount();
+    uint8_t reachable = used + 1;
+    return (reachable > GRID_MAX_PAGES) ? GRID_MAX_PAGES : reachable;
+}
+
 void INTERCEPTOR_SortByPopularity(void) {
     for (uint16_t i = 0; i < GRID_TOTAL_SLOTS - 1; i++) {
         for (uint16_t j = 0; j < GRID_TOTAL_SLOTS - 1 - i; j++) {

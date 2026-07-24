@@ -100,7 +100,7 @@ static void End_Interceptor_PTT(void)
 // Shared by long-press UP/DOWN and the side buttons.
 static void Change_Grid_Page(int8_t direction)
 {
-    uint8_t totalPages = INTERCEPTOR_GetUsedPageCount();
+    uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
     if (totalPages <= 1) return;
 
     int8_t next = (int8_t)gCurrentGridPage + direction;
@@ -112,16 +112,32 @@ static void Change_Grid_Page(int8_t direction)
     gUpdateDisplay = true;
 }
 
-// Moves the highlight to the next/previous slot, skipping empty ones,
-// bounded so it can never spin forever on an empty page.
-// Moves the highlight to the next/previous slot on the current page,
-// wrapping around. Deliberately does NOT skip empty slots - you need to
-// be able to navigate onto an empty one to add a channel there.
+// Moves the highlight to the next/previous slot. Rolls across page
+// boundaries into the next/previous reachable page (rather than just
+// wrapping within the same page), so a simple UP/DOWN gives one continuous
+// scroll across all your saved channels and the next open page - no
+// separate long-press gesture needed to actually get there.
 static void Move_Highlight(int8_t direction)
 {
     int8_t next = (int8_t)gInterceptorHighlight + direction;
-    if (next < 0) next = GRID_PAGE_SIZE - 1;
-    if (next >= GRID_PAGE_SIZE) next = 0;
+
+    if (next >= GRID_PAGE_SIZE) {
+        uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
+        if (gCurrentGridPage + 1 < totalPages) {
+            gCurrentGridPage++;
+            next = 0;
+        } else {
+            next = 0; // no further page - wrap within this one
+        }
+    } else if (next < 0) {
+        if (gCurrentGridPage > 0) {
+            gCurrentGridPage--;
+            next = GRID_PAGE_SIZE - 1;
+        } else {
+            next = GRID_PAGE_SIZE - 1; // already on page 1 - wrap within this one
+        }
+    }
+
     gInterceptorHighlight = (uint8_t)next;
 }
 
