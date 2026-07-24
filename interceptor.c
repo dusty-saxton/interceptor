@@ -55,14 +55,13 @@ int16_t  gInterceptorCheckingSlot = -1; // -1 = nothing currently being checked
 // How long to wait after retuning before trusting FUNCTION_INCOMING as a
 // real result - matches this firmware's own real scanner pacing
 // (scan_pause_delay_in_6_10ms = 100ms), not an arbitrary guess.
-// Doubled from the original 100ms - the real squelch decision (especially
-// CTCSS tone verification, which needs several full cycles of a
-// low-frequency tone to reliably decode) can genuinely take longer than
-// that. Real-world testing showed the hardware's own RX LED lighting up
-// on a channel that our check still reported as inactive - a strong sign
-// we were checking the result before the real squelch decision had
-// actually finished, not that the signal wasn't there.
-#define CANDIDATE_SETTLE_10MS_TICKS  20
+// Matches this firmware's own real scanner pacing (scan_pause_delay_in_6_10ms
+// = 100ms). A previous attempt doubled this to fix missed detections, but
+// the real cause was checking only for FUNCTION_INCOMING and missing the
+// natural progression to FUNCTION_RECEIVE (see Check_Candidate_Frequency) -
+// reverted back down now that the actual bug is fixed, since the longer
+// wait was also making scanning noticeably slower for no real benefit.
+#define CANDIDATE_SETTLE_10MS_TICKS  10
 
 enum { CANDCHECK_IDLE, CANDCHECK_WAITING };
 
@@ -120,7 +119,15 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
     if (st->settleCountdown > 0) return 0; // still counting down (see INTERCEPTOR_TimeSlice10ms)
 
     st->state = CANDCHECK_IDLE;
-    if (gCurrentFunction == FUNCTION_INCOMING) {
+    // FUNCTION_RECEIVE included, not just FUNCTION_INCOMING - a confirmed
+    // signal naturally progresses from INCOMING to RECEIVE shortly after
+    // (that transition is what actually unmutes audio), so checking only
+    // for INCOMING meant a real, fully-confirmed signal could already have
+    // moved past the state we were looking for by the time our settle
+    // timer expired - no amount of waiting longer would have caught that,
+    // which matches audio playing briefly but the check still reporting
+    // "not active" every time.
+    if (gCurrentFunction == FUNCTION_INCOMING || gCurrentFunction == FUNCTION_RECEIVE) {
         // Detecting FUNCTION_INCOMING alone isn't enough - this firmware's
         // own real scanner (CHFRSCANNER_ContinueScanning) explicitly calls
         // APP_StartListening() at this exact point to actually transition

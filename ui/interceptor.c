@@ -38,6 +38,19 @@ extern int16_t  gInterceptorCheckingSlot;
 // Inverts a proportional left-to-right slice of a 2-page-tall cell, based
 // on gInterceptorMeterPercent (0-100) - a live signal-strength sweep rather
 // than an instant full-cell flip.
+// Shifts already-rendered content up within its own page by right-shifting
+// each column's byte value (bit0 = top pixel, bit7 = bottom pixel per this
+// display's convention, confirmed via UI_DrawSelectionBox's own top/bottom
+// edge bits) - used to lift cell text off the exact bottom edge by a
+// couple pixels, since UI_PrintStringSmallBold has no sub-page positioning
+// of its own.
+static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
+{
+    if (page >= FRAME_LINES) return;
+    for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
+        gFrameBuffer[page][col] >>= pixels;
+}
+
 static void UI_DrawMeterSweep(uint8_t page, uint8_t x1, uint8_t x2)
 {
     uint8_t width    = (x2 >= x1) ? (x2 - x1 + 1) : 0;
@@ -127,6 +140,7 @@ void UI_DisplayInterceptorGridPage(void)
                 echo[d] = typed[d];
             sprintf(box_out, "%s", echo);
             UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -135,6 +149,7 @@ void UI_DisplayInterceptorGridPage(void)
             strncpy(box_out, gInterceptorNameBuf, 6);
             box_out[6] = '\0';
             UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             UI_DrawSelectionBox(page, x, xEnd);
             continue;
         }
@@ -147,6 +162,7 @@ void UI_DisplayInterceptorGridPage(void)
                     (unsigned int)(raw_f / 100000),
                     (unsigned int)((raw_f % 100000) / 1000));
             UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             if (i == gInterceptorHighlight) {
                 UI_DrawSelectionBox(page, x, xEnd);
             }
@@ -181,6 +197,7 @@ void UI_DisplayInterceptorGridPage(void)
             }
 
             UI_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
 
             if ((gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency)
                 || (gInterceptorTxOverrideActive && i == gInterceptorHighlight)) {
