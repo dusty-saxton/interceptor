@@ -52,6 +52,7 @@ uint8_t gBandSelectHighlight = 0;
 bool    gBandSelectEnteringFreq = false;
 uint8_t gBandSelectEnteringWhich = 0;
 bool    gExcludeNoaa = false;
+bool    gInterceptorPendingBlacklistBuzz = false; // played once gCurrentFunction actually leaves FUNCTION_RECEIVE
 bool    gSweepNeedsReinit = true; // forces the sweep to (re)initialize from the current selection
 bool     gInterceptorHuntTickerActive = false;
 uint32_t gInterceptorHuntTickerFreq = 0;
@@ -149,20 +150,22 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
     // which matches audio playing briefly but the check still reporting
     // "not active" every time.
     if (gCurrentFunction == FUNCTION_INCOMING || gCurrentFunction == FUNCTION_RECEIVE) {
-        // Detecting FUNCTION_INCOMING alone isn't enough - this firmware's
-        // own real scanner (CHFRSCANNER_ContinueScanning) explicitly calls
-        // APP_StartListening() at this exact point to actually transition
-        // into listening, which is what unmutes audio. Without this call,
-        // detection works but nothing is ever actually heard - confirmed
-        // missing piece.
-        APP_StartListening(FUNCTION_RECEIVE);
+        // APP_StartListening() moved out to each caller instead of being
+        // called here directly - AUDIO_PlayBeep() has a hardcoded gate
+        // (confirmed in audio.c) that silently refuses to play anything
+        // once gCurrentFunction == FUNCTION_RECEIVE. Calling
+        // APP_StartListening() here, before the caller gets a chance to
+        // play a new-capture beep, meant that beep was silently swallowed
+        // every single time - confirmed as the exact reason band sweep's
+        // capture beep was never audible, while hunt's was (hunt never
+        // touches gCurrentFunction at all, so it was never affected).
         return 1;
     }
     return 2;
 }
 
 // Real signal STRENGTH (RSSI) correctly stays steady for a well-received
-// signal - it doesn't fluctuate with speech, which is why the meter looked
+// signal - it doesn't fluctuate with speech - which is why the meter looked
 // "stuck" even though reception was working fine. What's actually needed
 // is the DEMODULATED AUDIO level. BK4819_GetVoiceAmplitudeOut() (used for
 // the TX meter) is confirmed TX-only by its one real usage in this
@@ -274,7 +277,7 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
     gUpdateDisplay = true; // new capture won't show up on screen otherwise
 }
 
-void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
+void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex, bool playDefaultBeep) {
     if (slotIndex >= GRID_TOTAL_SLOTS) return;
     if (gScanList[slotIndex].Frequency == 0) return; // nothing there
 
@@ -306,7 +309,8 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex) {
         sWaitingForReply = false;
     }
 
-    AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
+    if (playDefaultBeep)
+        AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
 // Just clears the slot - no blacklist entry at all, even for auto-detected
@@ -367,6 +371,15 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         sGridCheckState.settleCountdown--;
     if (sSweepCheckState.state == CANDCHECK_WAITING && sSweepCheckState.settleCountdown > 0)
         sSweepCheckState.settleCountdown--;
+
+    // AUDIO_PlayBeep() silently refuses to play anything while
+    // gCurrentFunction == FUNCTION_RECEIVE - the auto-blacklist buzz gets
+    // triggered mid-dwell (still receiving), so it can't play immediately.
+    // Checked every real tick and played the instant we're actually clear.
+    if (gInterceptorPendingBlacklistBuzz && gCurrentFunction != FUNCTION_RECEIVE) {
+        AUDIO_PlayBeep(BEEP_440HZ_500MS);
+        gInterceptorPendingBlacklistBuzz = false;
+    }
 
     // Maximum dwell time - some channels (NOAA weather radio, constant
     // noise/interference) never actually stop transmitting, which would
@@ -487,7 +500,8 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                             gScanList[dwellSlot].NoiseFlagLevel = avgLevel;
 
                             if (gScanList[dwellSlot].NoiseFlagCount >= NOISE_FLAGS_BEFORE_BLACKLIST) {
-                                INTERCEPTOR_DeleteAndBlacklist(dwellSlot);
+                                INTERCEPTOR_DeleteAndBlacklist(dwellSlot, false);
+                                gInterceptorPendingBlacklistBuzz = true; // played once we've actually left FUNCTION_RECEIVE - see INTERCEPTOR_TimeSlice10ms
                                 gInterceptorActiveFrequency = 0;
                                 sWaitingForReply = false;
                                 gUpdateDisplay = true;
@@ -765,6 +779,7 @@ static void Do_GridCheck_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
+        APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
     gInterceptorCheckingSlot = -1;
@@ -810,6 +825,7 @@ static void Do_FastGridScan_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
+        APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
     gInterceptorCheckingSlot = -1;
@@ -889,8 +905,12 @@ static void Do_BandSweep_Cycle(void) {
 
         if (!blacklisted) {
             gInterceptorHuntTickerActive = false;
+            // Beep FIRST, then transition to listening - reversed order
+            // was why this beep was never actually heard (see the note in
+            // Check_Candidate_Frequency above).
             INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
             gInterceptorActiveFrequency = sSweepFreq;
+            APP_StartListening(FUNCTION_RECEIVE);
             gUpdateDisplay = true;
             return; // stay here - don't advance yet, we're dwelling now
         }
