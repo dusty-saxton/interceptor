@@ -79,12 +79,13 @@ static void Safe_PrintStringSmallBold(char *str, uint8_t x, uint8_t xEnd, uint8_
 // full 3-decimal frequency into a cell that a normal 7px/char string
 // cannot fit at all (6 digits alone already need 42px against ~41px
 // available).
-static uint8_t Draw_Tight_Glyph(uint8_t page, uint8_t cursor, uint8_t cellRight, char ch, uint8_t advance)
+static uint8_t Draw_Tight_Glyph(uint8_t page, uint8_t cursor, uint8_t cellRight, char ch, uint8_t advance, int8_t drawOffset)
 {
+    int16_t drawAt = (int16_t)cursor + drawOffset;
     if (page < FRAME_LINES && ch > ' ' && ch < 127
-        && cursor + 6 <= cellRight && (uint16_t)cursor + 6 <= LCD_WIDTH) {
+        && drawAt >= 0 && drawAt + 6 <= cellRight && (uint16_t)(drawAt + 6) <= LCD_WIDTH) {
         uint32_t idx = (uint32_t)(ch - ' ' - 1);
-        memcpy(&gFrameBuffer[page][cursor], &TICKER_FONT[idx][0], 6);
+        memcpy(&gFrameBuffer[page][drawAt], &TICKER_FONT[idx][0], 6);
     }
     return (uint8_t)(cursor + advance);
 }
@@ -110,10 +111,10 @@ static void Print_Tight_Frequency(uint32_t raw_f, uint8_t x, uint8_t xEnd, uint8
         cursor = (uint8_t)(x + ((cellWidth - contentWidth) + 1) / 2);
 
     for (uint8_t i = 0; whole[i]; i++)
-        cursor = Draw_Tight_Glyph(page, cursor, cellRight, whole[i], 6);
-    cursor = Draw_Tight_Glyph(page, cursor, cellRight, '.', 3);
+        cursor = Draw_Tight_Glyph(page, cursor, cellRight, whole[i], 6, 0);
+    cursor = Draw_Tight_Glyph(page, cursor, cellRight, '.', 3, -1);
     for (uint8_t i = 0; frac[i]; i++)
-        cursor = Draw_Tight_Glyph(page, cursor, cellRight, frac[i], 6);
+        cursor = Draw_Tight_Glyph(page, cursor, cellRight, frac[i], 6, 0);
 }
 
 static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
@@ -267,6 +268,7 @@ void UI_DisplayInterceptorGridPage(void)
         }
 
         if (gScanList[idx].Frequency != 0) {
+            bool usedTightRenderer = false;
             if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 3
                 && gScanList[idx].CodeType != CODE_TYPE_OFF) {
                 // Briefly show the discovered tone instead of the
@@ -285,15 +287,16 @@ void UI_DisplayInterceptorGridPage(void)
                 strncpy(box_out, gScanList[idx].Name, 6);
                 box_out[6] = '\0';
             } else {
-                uint32_t raw_f = gScanList[idx].Frequency;
-                // Display-only truncation to 2 decimal places (whole
-                // stored Frequency is untouched and used for actual tuning).
-                sprintf(box_out, "%3u.%02u",
-                        (unsigned int)(raw_f / 100000),
-                        (unsigned int)((raw_f % 100000) / 1000));
+                // Full 3-decimal precision via the same tight-packing
+                // renderer the ticker uses - a normal string can't fit
+                // this many digits in one grid cell at all.
+                Print_Tight_Frequency(gScanList[idx].Frequency, x, xEnd, page + 1);
+                usedTightRenderer = true;
             }
 
-            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            if (!usedTightRenderer) {
+                Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            }
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
 
             if ((gInterceptorActiveFrequency != 0 && gScanList[idx].Frequency == gInterceptorActiveFrequency)

@@ -17,6 +17,7 @@ typedef struct {
     bool     IsLocked;    // manually-added channel: never auto-purged or evicted
     uint8_t  HitCount;    // times detected active while sniffing, used for sorting
     uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
+    uint8_t  NoiseFlagLevel; // average meter level from the last flagged pass, for cross-pass consistency comparison
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];

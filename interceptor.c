@@ -340,12 +340,22 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
-#define MAX_DWELL_10MS_TICKS 2000   // ~20 seconds - adjust to taste
+#define MAX_DWELL_10MS_TICKS 800   // ~8 seconds - adjust to taste
 #define NOISE_CHECK_10MS_TICKS 300     // ~3 seconds of samples before judging - unverified starting guess
-#define NOISE_VARIANCE_THRESHOLD 5     // meter range below this over the check window = "flat"
-#define NOISE_LOUD_THRESHOLD 60        // meter max above this = "loud" - flat+quiet could just be a calm voice
+#define NOISE_VARIANCE_THRESHOLD 20     // meter range below this over the check window = "flat"
+#define NOISE_LOUD_THRESHOLD 30        // meter max above this = "loud" - flat+quiet could just be a calm voice
 #define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
 #define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
+#define NOISE_STEP_DELTA_THRESHOLD 2   // largest single sample-to-sample jump that still counts as "smooth" (catches gradual drift, not just dead-flat)
+#define NOISE_CROSSPASS_TOLERANCE 4    // how close two passes' average levels need to be to count as "the same source, still there"
+// Pause detection: the meter's floor while genuinely receiving is 10 (see
+// Update_Meter_Level) - real speech has silent gaps between words/phrases
+// that should drop close to that floor; a noise source that "never takes
+// a break" won't. If the lowest reading seen anywhere in the sample window
+// drops to or below this, that's treated as decisive evidence of a pause
+// and overrides the flat+loud determination entirely, even if the rest of
+// the signal otherwise looked exactly like noise.
+#define NOISE_PAUSE_THRESHOLD 20
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
@@ -372,18 +382,39 @@ void INTERCEPTOR_TimeSlice10ms(void) {
     // tend to stay flat. A signal that's flat AND quiet could just be a
     // calm, weak voice though - it's specifically flat AND LOUD that's a
     // much stronger noise indicator, since real speech doesn't sit pinned
-    // high with zero variation. After a few seconds of samples, a
-    // flat+loud dwell shortens the remaining wait instead of the full
-    // timeout. If the SAME saved cell gets flagged this way repeatedly in
-    // a row, it gets auto-blacklisted - one flagged pass alone never
-    // blacklists anything, only shortens that one dwell. Any normal-
-    // variance (or quiet) dwell resets that cell's count back to zero.
+    // high with zero variation.
+    //
+    // "Flat" is checked two ways: the overall min/max range over the
+    // sample window, AND the largest single sample-to-sample jump. Some
+    // noise sources drift gradually (slowly rising/falling over many
+    // seconds) without ever taking the rapid, choppy jumps real speech
+    // does - the overall range alone could miss that and mistake slow
+    // drift for genuine variation, so either check flags it as smooth.
+    //
+    // Cross-pass consistency: if the SAME saved cell's average level looks
+    // similar from one flagged pass to the next, that's corroborating
+    // evidence of an unchanging source - a real conversation encountered
+    // repeatedly would vary (different people, different volume), a
+    // persistent noise source generally wouldn't. A meaningfully different
+    // level restarts the streak at 1 rather than discarding it entirely,
+    // since it's still flat+loud right now, just possibly a different
+    // source or a genuine change.
+    //
+    // After a few seconds of samples, a flagged dwell shortens the
+    // remaining wait instead of the full timeout. If the same cell gets
+    // flagged NOISE_FLAGS_BEFORE_BLACKLIST times in a row, it's auto-
+    // blacklisted - one flagged pass alone never blacklists anything. Any
+    // normal-variance (or quiet) dwell resets the count back to zero.
     // Still a heuristic, not a real classifier - thresholds are starting
     // guesses that will need real-world tuning.
     {
         static bool sWasDwelling = false;
         static uint8_t sDwellMeterMin = 255;
         static uint8_t sDwellMeterMax = 0;
+        static uint8_t sDwellMeterPrev = 0;
+        static uint8_t sDwellMaxStepDelta = 0;
+        static uint32_t sDwellMeterSum = 0;
+        static uint16_t sDwellSampleCount = 0;
         static uint16_t sNoiseCheckCountdown = 0;
         static bool sNoiseCheckDone = false;
 
@@ -393,6 +424,10 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                 sWasDwelling = true;
                 sDwellMeterMin = 255;
                 sDwellMeterMax = 0;
+                sDwellMeterPrev = gInterceptorMeterPercent;
+                sDwellMaxStepDelta = 0;
+                sDwellMeterSum = 0;
+                sDwellSampleCount = 0;
                 sNoiseCheckCountdown = NOISE_CHECK_10MS_TICKS;
                 sNoiseCheckDone = false;
             } else if (sDwellDurationCountdown > 0) {
@@ -407,13 +442,27 @@ void INTERCEPTOR_TimeSlice10ms(void) {
 
             if (gInterceptorMeterPercent < sDwellMeterMin) sDwellMeterMin = gInterceptorMeterPercent;
             if (gInterceptorMeterPercent > sDwellMeterMax) sDwellMeterMax = gInterceptorMeterPercent;
+            {
+                uint8_t stepDelta = (gInterceptorMeterPercent > sDwellMeterPrev)
+                    ? (uint8_t)(gInterceptorMeterPercent - sDwellMeterPrev)
+                    : (uint8_t)(sDwellMeterPrev - gInterceptorMeterPercent);
+                if (stepDelta > sDwellMaxStepDelta) sDwellMaxStepDelta = stepDelta;
+                sDwellMeterPrev = gInterceptorMeterPercent;
+            }
+            sDwellMeterSum += gInterceptorMeterPercent;
+            sDwellSampleCount++;
 
             if (!sNoiseCheckDone && sNoiseCheckCountdown > 0) {
                 sNoiseCheckCountdown--;
                 if (sNoiseCheckCountdown == 0) {
                     sNoiseCheckDone = true;
-                    bool flatAndLoud = (sDwellMeterMax - sDwellMeterMin) < NOISE_VARIANCE_THRESHOLD
-                                       && sDwellMeterMax > NOISE_LOUD_THRESHOLD;
+                    bool overallFlat = (sDwellMeterMax - sDwellMeterMin) < NOISE_VARIANCE_THRESHOLD;
+                    bool smoothDrift = sDwellMaxStepDelta < NOISE_STEP_DELTA_THRESHOLD;
+                    bool loud        = sDwellMeterMax > NOISE_LOUD_THRESHOLD;
+                    bool hadPause    = sDwellMeterMin <= NOISE_PAUSE_THRESHOLD;
+                    bool flatAndLoud = (overallFlat || smoothDrift) && loud && !hadPause;
+                    uint8_t avgLevel = (sDwellSampleCount > 0)
+                        ? (uint8_t)(sDwellMeterSum / sDwellSampleCount) : 0;
 
                     // Find which saved slot this dwell frequency belongs to,
                     // to track its consecutive flag count.
@@ -427,7 +476,16 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                             sDwellDurationCountdown = NOISE_EARLY_EXIT_10MS_TICKS;
 
                         if (dwellSlot != 0xFFFF && !gScanList[dwellSlot].IsLocked) {
-                            gScanList[dwellSlot].NoiseFlagCount++;
+                            uint8_t levelDelta = (avgLevel > gScanList[dwellSlot].NoiseFlagLevel)
+                                ? (uint8_t)(avgLevel - gScanList[dwellSlot].NoiseFlagLevel)
+                                : (uint8_t)(gScanList[dwellSlot].NoiseFlagLevel - avgLevel);
+                            bool consistent = (gScanList[dwellSlot].NoiseFlagCount == 0)
+                                || (levelDelta < NOISE_CROSSPASS_TOLERANCE);
+
+                            gScanList[dwellSlot].NoiseFlagCount = consistent
+                                ? (uint8_t)(gScanList[dwellSlot].NoiseFlagCount + 1) : 1;
+                            gScanList[dwellSlot].NoiseFlagLevel = avgLevel;
+
                             if (gScanList[dwellSlot].NoiseFlagCount >= NOISE_FLAGS_BEFORE_BLACKLIST) {
                                 INTERCEPTOR_DeleteAndBlacklist(dwellSlot);
                                 gInterceptorActiveFrequency = 0;
