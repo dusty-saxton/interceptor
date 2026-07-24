@@ -321,8 +321,8 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
 #define MAX_DWELL_10MS_TICKS 800   // ~20 seconds - adjust to taste
 #define NOISE_CHECK_10MS_TICKS 300     // ~3 seconds of samples before judging - unverified starting guess
-#define NOISE_VARIANCE_THRESHOLD 10     // meter range below this over the check window = "flat"
-#define NOISE_LOUD_THRESHOLD 60        // meter max above this = "loud" - flat+quiet could just be a calm voice
+#define NOISE_VARIANCE_THRESHOLD 20     // meter range below this over the check window = "flat"
+#define NOISE_LOUD_THRESHOLD 30        // meter max above this = "loud" - flat+quiet could just be a calm voice
 #define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
 #define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
 
