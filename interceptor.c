@@ -155,7 +155,14 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
 
 static void Update_Meter_Level(void) {
     uint8_t af = BK4819_GetAfTxRx();
-    uint32_t pct = ((uint32_t)af * 100) / AF_LEVEL_MAX;
+    // Real-world testing showed this backwards: silence pinned the meter
+    // to full/black, loud audio pushed it toward empty. That means this
+    // register is inversely related to audio level - lower during strong
+    // signal, higher during silence/noise - the opposite of what we
+    // assumed going in (flagged at the time as a real risk of using this
+    // experimental, unverified register). Inverting it here.
+    uint8_t afInverted = (af > AF_LEVEL_MAX) ? 0 : (AF_LEVEL_MAX - af);
+    uint32_t pct = ((uint32_t)afInverted * 100) / AF_LEVEL_MAX;
     if (pct > 100) pct = 100;
     // Same 10% floor + 10-100% scaling as before.
     gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
