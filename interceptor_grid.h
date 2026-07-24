@@ -16,6 +16,7 @@ typedef struct {
     uint8_t  Code;         // CTCSS/DCS code index for CodeType, meaningless if CodeType is OFF
     bool     IsLocked;    // manually-added channel: never auto-purged or evicted
     uint8_t  HitCount;    // times detected active while sniffing, used for sorting
+    uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];

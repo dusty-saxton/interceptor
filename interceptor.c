@@ -319,7 +319,12 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
-#define MAX_DWELL_10MS_TICKS 800   // ~8 seconds - adjust to taste
+#define MAX_DWELL_10MS_TICKS 2000   // ~20 seconds - adjust to taste
+#define NOISE_CHECK_10MS_TICKS 300     // ~3 seconds of samples before judging - unverified starting guess
+#define NOISE_VARIANCE_THRESHOLD 5     // meter range below this over the check window = "flat"
+#define NOISE_LOUD_THRESHOLD 60        // meter max above this = "loud" - flat+quiet could just be a calm voice
+#define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
+#define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
@@ -340,12 +345,35 @@ void INTERCEPTOR_TimeSlice10ms(void) {
     // - it'll get re-detected and dwelled on again naturally next time it
     // comes up in rotation, which is the right behavior for something
     // that's legitimately busy rather than needing to be blacklisted.
+    //
+    // Noise-vs-voice heuristic: real speech naturally varies in level
+    // (pauses, changing loudness), while steady interference/carriers/tones
+    // tend to stay flat. A signal that's flat AND quiet could just be a
+    // calm, weak voice though - it's specifically flat AND LOUD that's a
+    // much stronger noise indicator, since real speech doesn't sit pinned
+    // high with zero variation. After a few seconds of samples, a
+    // flat+loud dwell shortens the remaining wait instead of the full
+    // timeout. If the SAME saved cell gets flagged this way repeatedly in
+    // a row, it gets auto-blacklisted - one flagged pass alone never
+    // blacklists anything, only shortens that one dwell. Any normal-
+    // variance (or quiet) dwell resets that cell's count back to zero.
+    // Still a heuristic, not a real classifier - thresholds are starting
+    // guesses that will need real-world tuning.
     {
         static bool sWasDwelling = false;
+        static uint8_t sDwellMeterMin = 255;
+        static uint8_t sDwellMeterMax = 0;
+        static uint16_t sNoiseCheckCountdown = 0;
+        static bool sNoiseCheckDone = false;
+
         if (gInterceptorActiveFrequency != 0) {
             if (!sWasDwelling) {
                 sDwellDurationCountdown = MAX_DWELL_10MS_TICKS;
                 sWasDwelling = true;
+                sDwellMeterMin = 255;
+                sDwellMeterMax = 0;
+                sNoiseCheckCountdown = NOISE_CHECK_10MS_TICKS;
+                sNoiseCheckDone = false;
             } else if (sDwellDurationCountdown > 0) {
                 sDwellDurationCountdown--;
                 if (sDwellDurationCountdown == 0) {
@@ -353,6 +381,42 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                     sWaitingForReply = false;
                     INTERCEPTOR_SortByPopularity();
                     gUpdateDisplay = true;
+                }
+            }
+
+            if (gInterceptorMeterPercent < sDwellMeterMin) sDwellMeterMin = gInterceptorMeterPercent;
+            if (gInterceptorMeterPercent > sDwellMeterMax) sDwellMeterMax = gInterceptorMeterPercent;
+
+            if (!sNoiseCheckDone && sNoiseCheckCountdown > 0) {
+                sNoiseCheckCountdown--;
+                if (sNoiseCheckCountdown == 0) {
+                    sNoiseCheckDone = true;
+                    bool flatAndLoud = (sDwellMeterMax - sDwellMeterMin) < NOISE_VARIANCE_THRESHOLD
+                                       && sDwellMeterMax > NOISE_LOUD_THRESHOLD;
+
+                    // Find which saved slot this dwell frequency belongs to,
+                    // to track its consecutive flag count.
+                    uint16_t dwellSlot = 0xFFFF;
+                    for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+                        if (gScanList[i].Frequency == gInterceptorActiveFrequency) { dwellSlot = i; break; }
+                    }
+
+                    if (flatAndLoud) {
+                        if (sDwellDurationCountdown > NOISE_EARLY_EXIT_10MS_TICKS)
+                            sDwellDurationCountdown = NOISE_EARLY_EXIT_10MS_TICKS;
+
+                        if (dwellSlot != 0xFFFF && !gScanList[dwellSlot].IsLocked) {
+                            gScanList[dwellSlot].NoiseFlagCount++;
+                            if (gScanList[dwellSlot].NoiseFlagCount >= NOISE_FLAGS_BEFORE_BLACKLIST) {
+                                INTERCEPTOR_DeleteAndBlacklist(dwellSlot);
+                                gInterceptorActiveFrequency = 0;
+                                sWaitingForReply = false;
+                                gUpdateDisplay = true;
+                            }
+                        }
+                    } else if (dwellSlot != 0xFFFF) {
+                        gScanList[dwellSlot].NoiseFlagCount = 0;
+                    }
                 }
             }
         } else {
