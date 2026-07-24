@@ -47,8 +47,17 @@ extern int16_t  gInterceptorCheckingSlot;
 static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
 {
     if (page >= FRAME_LINES) return;
-    for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++)
+    uint8_t mask = (uint8_t)((1u << pixels) - 1); // low `pixels` bits = top `pixels` rows of this page
+    for (uint8_t col = x1; col <= x2 && col < LCD_WIDTH; col++) {
+        uint8_t spillover = gFrameBuffer[page][col] & mask;
         gFrameBuffer[page][col] >>= pixels;
+        // Without this, those spillover rows are just lost - which is
+        // exactly why the text looked chopped off at the top before.
+        // Writing them into the bottom `pixels` rows of the page above
+        // preserves the full glyph instead of clipping it.
+        if (page > 0)
+            gFrameBuffer[page - 1][col] |= (uint8_t)(spillover << (8 - pixels));
+    }
 }
 
 static void UI_DrawMeterSweep(uint8_t page, uint8_t x1, uint8_t x2)
