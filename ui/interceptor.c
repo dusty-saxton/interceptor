@@ -4,6 +4,7 @@
 #include "ui/helper.h"
 #include "ui/inputbox.h"
 #include "dcs.h"
+#include "font.h"
 #include "settings.h"
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +63,49 @@ static void Safe_PrintStringSmallBold(char *str, uint8_t x, uint8_t xEnd, uint8_
     if (strlen(str) > maxChars)
         str[maxChars] = '\0';
     UI_PrintStringSmallBold(str, x, xEnd, page);
+}
+
+#ifdef ENABLE_SMALL_BOLD
+#define TICKER_FONT gFontSmallBold
+#else
+#define TICKER_FONT gFontSmall
+#endif
+
+// Draws one glyph at an exact column, advancing the cursor by a caller-
+// given amount instead of the standard fixed 7px (6px glyph + 1px gap).
+// Every write is bounds-checked explicitly against both the cell's own
+// width and the physical screen width - unlike the standard print
+// functions, which do neither. This is what lets the ticker below pack a
+// full 3-decimal frequency into a cell that a normal 7px/char string
+// cannot fit at all (6 digits alone already need 42px against ~41px
+// available).
+static uint8_t Draw_Tight_Glyph(uint8_t page, uint8_t cursor, uint8_t cellRight, char ch, uint8_t advance)
+{
+    if (page < FRAME_LINES && ch > ' ' && ch < 127
+        && cursor + 6 <= cellRight && (uint16_t)cursor + 6 <= LCD_WIDTH) {
+        uint32_t idx = (uint32_t)(ch - ' ' - 1);
+        memcpy(&gFrameBuffer[page][cursor], &TICKER_FONT[idx][0], 6);
+    }
+    return (uint8_t)(cursor + advance);
+}
+
+// Packs a frequency as ddd.ddd tightly enough to fit a single grid cell -
+// zero gap between digits (6px advance instead of 7px) and a narrow
+// 3px advance for the decimal point instead of the usual full glyph slot.
+static void Print_Tight_Frequency(uint32_t raw_f, uint8_t x, uint8_t xEnd, uint8_t page)
+{
+    char whole[4], frac[4];
+    sprintf(whole, "%u", (unsigned int)(raw_f / 100000));
+    sprintf(frac, "%03u", (unsigned int)((raw_f % 100000) / 100));
+
+    uint8_t cellRight = (xEnd < LCD_WIDTH) ? (uint8_t)(xEnd + 1) : LCD_WIDTH;
+    uint8_t cursor = x;
+
+    for (uint8_t i = 0; whole[i]; i++)
+        cursor = Draw_Tight_Glyph(page, cursor, cellRight, whole[i], 6);
+    cursor = Draw_Tight_Glyph(page, cursor, cellRight, '.', 3);
+    for (uint8_t i = 0; frac[i]; i++)
+        cursor = Draw_Tight_Glyph(page, cursor, cellRight, frac[i], 6);
 }
 
 static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
@@ -202,11 +246,11 @@ void UI_DisplayInterceptorGridPage(void)
         if (gScanList[idx].Frequency == 0 && idx == nextEmptySlot && gInterceptorHuntTickerActive) {
             // Live scanning ticker - shows the frequency hunt is currently
             // evaluating, right in the cell a new capture would land in.
+            // Uses the tight-packing renderer for full 3-decimal precision -
+            // a normal 7px/char string can't fit 6 digits + a period in
+            // this cell width at all (42px needed vs ~41px available).
             uint32_t raw_f = gInterceptorHuntTickerFreq;
-            sprintf(box_out, "%3u.%02u",
-                    (unsigned int)(raw_f / 100000),
-                    (unsigned int)((raw_f % 100000) / 1000));
-            Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+            Print_Tight_Frequency(raw_f, x, xEnd, page + 1);
             Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
             if (i == gInterceptorHighlight) {
                 UI_DrawSelectionBox(page, x, xEnd);
