@@ -1,4 +1,5 @@
 
+
 # compile options (see README.md for descriptions)
 # 0 = disable
 # 1 = enable
@@ -32,7 +33,7 @@ ENABLE_NO_CODE_SCAN_TIMEOUT   ?= 1
 ENABLE_AM_FIX                 ?= 1
 ENABLE_SQUELCH_MORE_SENSITIVE ?= 1
 ENABLE_FASTER_CHANNEL_SCAN    ?= 1
-ENABLE_RSSI_BAR               ?= 1
+ENABLE_RSSI_BAR               ?= 0
 ENABLE_AUDIO_BAR              ?= 0
 ENABLE_COPY_CHAN_TO_VFO       ?= 1
 ENABLE_SPECTRUM               ?= 0
