@@ -22,6 +22,10 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code);
 // digital-junk signals that keep getting falsely detected as activity).
 void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex);
 
+// Just clears the slot, no blacklist entry - for a quick "get rid of this"
+// versus "this is noise, never show it again".
+void INTERCEPTOR_DeleteOnly(uint16_t slotIndex);
+
 // Re-sorts the grid by HitCount, most-detected first. Locked slots never move.
 void INTERCEPTOR_SortByPopularity(void);
 
