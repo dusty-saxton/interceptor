@@ -20,7 +20,7 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code);
 // Removes a slot from the grid and adds its frequency to the permanent
 // blacklist, so future hunting will never re-save it (useful for noise/
 // digital-junk signals that keep getting falsely detected as activity).
-void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex);
+void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex, bool playDefaultBeep);
 
 // Just clears the slot, no blacklist entry - for a quick "get rid of this"
 // versus "this is noise, never show it again".
