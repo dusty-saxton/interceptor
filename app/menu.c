@@ -1404,8 +1404,13 @@ static void MENU_Key_MENU(const bool bKeyPressed, const bool bKeyHeld)
 			if (UI_MENU_GetCurrentMenuId() != MENU_SCR)
 				gAnotherVoiceID = MenuList[gMenuCursor].voice_id;
 		#endif
+        #ifdef ENABLE_DTMF_CALLING
         if (UI_MENU_GetCurrentMenuId() == MENU_ANI_ID || UI_MENU_GetCurrentMenuId() == MENU_UPCODE|| UI_MENU_GetCurrentMenuId() == MENU_DWCODE)
             return;
+#else
+        if (UI_MENU_GetCurrentMenuId() == MENU_UPCODE || UI_MENU_GetCurrentMenuId() == MENU_DWCODE)
+            return;
+#endif
 		#if 1
 			if (UI_MENU_GetCurrentMenuId() == MENU_DEL_CH || UI_MENU_GetCurrentMenuId() == MENU_MEM_NAME)
 				if (!RADIO_CheckValidChannel(gSubMenuSelection, false, 0))
