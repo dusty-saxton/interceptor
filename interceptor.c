@@ -319,7 +319,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
 #define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
 #define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
-#define MAX_DWELL_10MS_TICKS 2000   // ~20 seconds - adjust to taste
+#define MAX_DWELL_10MS_TICKS 800   // ~8 seconds - adjust to taste
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
