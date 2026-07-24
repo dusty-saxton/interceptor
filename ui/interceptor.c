@@ -99,7 +99,15 @@ static void Print_Tight_Frequency(uint32_t raw_f, uint8_t x, uint8_t xEnd, uint8
     sprintf(frac, "%03u", (unsigned int)((raw_f % 100000) / 100));
 
     uint8_t cellRight = (xEnd < LCD_WIDTH) ? (uint8_t)(xEnd + 1) : LCD_WIDTH;
+    uint8_t cellWidth = (cellRight >= x) ? (uint8_t)(cellRight - x) : 0;
+
+    // Actual visual width for THIS specific value - varies with digit count
+    // (2-digit vs 3-digit MHz), so a fixed offset wouldn't center correctly
+    // for every case. 6px per digit, no gaps, plus the period's 3px advance.
+    uint8_t contentWidth = (uint8_t)(6 * (strlen(whole) + strlen(frac)) + 3);
     uint8_t cursor = x;
+    if (contentWidth < cellWidth)
+        cursor = (uint8_t)(x + ((cellWidth - contentWidth) + 1) / 2);
 
     for (uint8_t i = 0; whole[i]; i++)
         cursor = Draw_Tight_Glyph(page, cursor, cellRight, whole[i], 6);
