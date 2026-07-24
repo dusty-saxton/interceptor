@@ -1,5 +1,4 @@
 
-
 # compile options (see README.md for descriptions)
 # 0 = disable
 # 1 = enable
@@ -35,7 +34,7 @@ ENABLE_SQUELCH_MORE_SENSITIVE ?= 1
 ENABLE_FASTER_CHANNEL_SCAN    ?= 1
 ENABLE_RSSI_BAR               ?= 0
 ENABLE_AUDIO_BAR              ?= 0
-ENABLE_COPY_CHAN_TO_VFO       ?= 1
+ENABLE_COPY_CHAN_TO_VFO       ?= 0
 ENABLE_SPECTRUM               ?= 0
 ENABLE_REDUCE_LOW_MID_TX_POWER?= 0
 ENABLE_BYP_RAW_DEMODULATORS   ?= 0
