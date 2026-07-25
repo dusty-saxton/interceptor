@@ -194,6 +194,19 @@ static void Update_Meter_Level(void) {
     gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
 }
 
+// Defined in app/interceptor.c - needed here for Snap_Cursor_To_Slot.
+extern uint8_t gInterceptorHighlight;
+
+// Moves the cursor and page to match whatever slot just became active -
+// so the selection box always shows where the most recent activity was,
+// even after it ends, without needing to manually navigate there.
+static void Snap_Cursor_To_Slot(uint16_t idx) {
+    if (idx >= GRID_TOTAL_SLOTS) return;
+    gCurrentGridPage = (uint8_t)(idx / GRID_PAGE_SIZE);
+    gInterceptorHighlight = (uint8_t)(idx % GRID_PAGE_SIZE);
+    gUpdateDisplay = true;
+}
+
 uint8_t INTERCEPTOR_GetUsedPageCount(void) {
     for (int16_t i = GRID_TOTAL_SLOTS - 1; i >= 0; i--) {
         if (gScanList[i].Frequency != 0)
@@ -781,6 +794,7 @@ static void Do_GridCheck_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
+        Snap_Cursor_To_Slot(checking_idx);
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -827,6 +841,7 @@ static void Do_FastGridScan_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
+        Snap_Cursor_To_Slot(checking_idx);
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -910,6 +925,9 @@ static void Do_BandSweep_Cycle(void) {
             // Check_Candidate_Frequency above).
             INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
             gInterceptorActiveFrequency = sSweepFreq;
+            for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+                if (gScanList[i].Frequency == sSweepFreq) { Snap_Cursor_To_Slot(i); break; }
+            }
             APP_StartListening(FUNCTION_RECEIVE);
             gUpdateDisplay = true;
             return; // stay here - don't advance yet, we're dwelling now
@@ -1033,11 +1051,26 @@ void INTERCEPTOR_Engine_Tick(void) {
         // filter-path fix. Whichever one is currently busy keeps the radio
         // until it actually finishes.
         static bool huntOwnsTuner = true;
+        static uint16_t huntTurnTicks = 0;
+        #define HUNT_MAX_TURN_TICKS 150 // ~1.5 seconds - forces a yield to grid-check even mid-attempt
 
         if (huntOwnsTuner) {
             Do_Hunt_Cycle();
-            if (sHuntState == HUNT_IDLE)
+            huntTurnTicks++;
+            if (sHuntState == HUNT_IDLE) {
                 huntOwnsTuner = false;
+                huntTurnTicks = 0;
+            } else if (huntTurnTicks >= HUNT_MAX_TURN_TICKS) {
+                // Been holding the tuner too long without giving grid-check
+                // a turn - abandon this attempt cleanly (a partial hunt
+                // attempt isn't useful data anyway, it'll just try again
+                // fresh later) and yield, so an ongoing conversation on a
+                // saved cell that paused briefly actually gets a chance to
+                // be re-detected instead of being starved out.
+                Hunt_Reset();
+                huntOwnsTuner = false;
+                huntTurnTicks = 0;
+            }
         } else {
             Do_GridCheck_Cycle();
             if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
