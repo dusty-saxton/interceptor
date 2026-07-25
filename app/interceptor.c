@@ -280,26 +280,42 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // from app/main.c's - pressing F+7 while already viewing the grid would
     // otherwise never reach that logic at all.
     if (gWasFKeyPressed && Key == KEY_7) {
-        if (!bKeyPressed) return; // act on press, not release
-        gWasFKeyPressed = false;
-        gUpdateStatus   = true;
-
-        gInterceptorBandSweepActive = false; // mutually exclusive with band sweep
-
-        if (!bKeyHeld) {
-            gSniffingEnabled = !gSniffingEnabled;
-        } else {
-            gSniffingEnabled = false;
+        // Mutually exclusive: long-press-detected fires once while still
+        // held; short-press only resolves on release, and only if the
+        // long-press event never fired for this same hold. Treating both
+        // as independent events (as this used to) meant a held F+7 could
+        // toggle sniffing on and then immediately force it back off from
+        // one single button hold.
+        if (bKeyHeld) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            gSniffingEnabled = false; // long press: force off
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            gUpdateDisplay = true;
+            return;
         }
-        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
-        gUpdateDisplay = true;
-        return;
+        if (!bKeyPressed) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            gSniffingEnabled = !gSniffingEnabled; // genuine short press: toggle
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            gUpdateDisplay = true;
+            return;
+        }
+        return; // initial press - wait to see if this becomes short or long
     }
 
     // F+5 toggles the wide VHF/UHF band sweep, same "handle it on our own
     // screen too" reasoning as F+7 above.
     if (gWasFKeyPressed && Key == KEY_5) {
-        if (!bKeyPressed) return; // act on press, not release
+        // Only the clean initial press, not the long-press-detected event
+        // that fires later on the same physical hold (without waiting for
+        // release) - reacting to both meant a held F+5 could trigger this
+        // twice, with the second firing landing on whatever screen the
+        // first one had already switched to.
+        if (!bKeyPressed || bKeyHeld) return;
         gWasFKeyPressed = false;
         gUpdateStatus   = true;
 

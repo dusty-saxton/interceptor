@@ -88,7 +88,9 @@ void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 
     // F+5: confirm current selection and actually start sweeping.
     if (gWasFKeyPressed && Key == KEY_5) {
-        if (!bKeyPressed) return;
+        // Only the clean initial press - see the matching note in
+        // app/interceptor.c for why bKeyHeld must also be excluded here.
+        if (!bKeyPressed || bKeyHeld) return;
         gWasFKeyPressed = false;
         gUpdateStatus   = true;
 
@@ -114,19 +116,31 @@ void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     }
 
     // F+7 still works from here too, same as it does everywhere else -
-    // abandons band selection and starts sniffing directly.
+    // abandons band selection and starts sniffing directly. Mutually
+    // exclusive short/long handling - see the matching note in
+    // app/interceptor.c.
     if (gWasFKeyPressed && Key == KEY_7) {
-        if (!bKeyPressed) return;
-        gWasFKeyPressed = false;
-        gUpdateStatus   = true;
-
-        gInterceptorBandSweepActive = false;
-        gSniffingEnabled = !bKeyHeld;
-
-        gInterceptorViewActive = true;
-        gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
-        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
-        return;
+        if (bKeyHeld) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            gSniffingEnabled = false;
+            gInterceptorViewActive = true;
+            gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            return;
+        }
+        if (!bKeyPressed) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            gSniffingEnabled = true;
+            gInterceptorViewActive = true;
+            gRequestDisplayScreen  = DISPLAY_INTERCEPTOR;
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            return;
+        }
+        return; // initial press - wait to see if this becomes short or long
     }
 
     if (bKeyHeld) return; // this screen only reacts to clean presses
