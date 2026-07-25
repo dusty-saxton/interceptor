@@ -180,7 +180,18 @@ void UI_DisplayInterceptorGridPage(void)
     char status_str[24];
     uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
 
-    if (gInterceptorBandSweepActive) {
+    if (gInterceptorNameEditIndex >= 0) {
+        // Renaming - show the real frequency here instead of the normal
+        // mode indicator, since the cell itself is showing the name being
+        // typed and has no room to also show the frequency. This is also
+        // the only way to look up a cell's frequency once it's already
+        // been renamed, without changing the name (EXIT re-saves it
+        // unchanged if nothing was actually edited).
+        uint16_t editIdx = (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
+        uint32_t raw_f = gScanList[editIdx].Frequency;
+        sprintf(status_str, "%u.%05u MHz",
+                (unsigned int)(raw_f / 100000), (unsigned int)(raw_f % 100000));
+    } else if (gInterceptorBandSweepActive) {
         sprintf(status_str, "SCAN ON P%u/%u", gCurrentGridPage + 1, totalPages);
     } else {
         sprintf(status_str, gSniffingEnabled ? "INT ON P%u/%u" : "INT OFF P%u/%u",
