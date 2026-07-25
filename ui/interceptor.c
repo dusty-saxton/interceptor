@@ -181,16 +181,29 @@ void UI_DisplayInterceptorGridPage(void)
     uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
 
     if (gInterceptorNameEditIndex >= 0) {
-        // Renaming - show the real frequency here instead of the normal
-        // mode indicator, since the cell itself is showing the name being
-        // typed and has no room to also show the frequency. This is also
-        // the only way to look up a cell's frequency once it's already
-        // been renamed, without changing the name (EXIT re-saves it
-        // unchanged if nothing was actually edited).
+        // Renaming - show the real frequency (and tone, if any) here
+        // instead of the normal mode indicator, since the cell itself is
+        // showing the name being typed and has no room for anything else.
+        // This is also the only way to look up a cell's frequency/tone
+        // once it's already been renamed, without changing the name
+        // (EXIT re-saves it unchanged if nothing was actually edited).
         uint16_t editIdx = (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
         uint32_t raw_f = gScanList[editIdx].Frequency;
-        sprintf(status_str, "%u.%05u MHz",
-                (unsigned int)(raw_f / 100000), (unsigned int)(raw_f % 100000));
+        uint8_t codeType = gScanList[editIdx].CodeType;
+
+        if (codeType == CODE_TYPE_CONTINUOUS_TONE) {
+            uint16_t tone = CTCSS_Options[gScanList[editIdx].Code];
+            sprintf(status_str, "%u.%03u %u.%uHz",
+                    (unsigned int)(raw_f / 100000), (unsigned int)((raw_f % 100000) / 100),
+                    tone / 10, tone % 10);
+        } else if (codeType == CODE_TYPE_DIGITAL || codeType == CODE_TYPE_REVERSE_DIGITAL) {
+            sprintf(status_str, "%u.%03u D%03o",
+                    (unsigned int)(raw_f / 100000), (unsigned int)((raw_f % 100000) / 100),
+                    DCS_Options[gScanList[editIdx].Code]);
+        } else {
+            sprintf(status_str, "%u.%05u MHz",
+                    (unsigned int)(raw_f / 100000), (unsigned int)(raw_f % 100000));
+        }
     } else if (gInterceptorBandSweepActive) {
         sprintf(status_str, "SCAN ON P%u/%u", gCurrentGridPage + 1, totalPages);
     } else {
