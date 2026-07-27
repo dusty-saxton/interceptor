@@ -60,16 +60,7 @@ extern int16_t  gInterceptorLastActiveSlot; // -1 = none yet - purely visual, ne
 typedef struct {
     uint32_t StartFreq; // 10Hz units, same convention as everything else here
     uint32_t EndFreq;
-    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band, a single
-                        // fixed step was systematically missing channels that don't
-                        // happen to land on it (confirmed: 146.720 MHz, 5kHz-aligned,
-                        // was never reachable on a 12.5kHz grid starting elsewhere)
-    uint8_t  Bandwidth; // BK4819_FILTER_BW_WIDE or _NARROW - forcing narrow universally
-                        // was wrong for ham bands (not subject to the FCC narrowbanding
-                        // mandate, conventionally wide) and the 470-512MHz T-band
-                        // (explicitly exempted from that same mandate)
-    uint8_t  Modulation; // MODULATION_FM for almost everything; MODULATION_AM for the
-                         // civil and military air bands (aviation voice is AM)
+    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band
     char     Name[12];
     bool     Enabled;   // currently checked for sweeping
 } SweepBand_t;
