@@ -1,6 +1,8 @@
 #include "interceptor_grid.h"
 #include "interceptor.h"
 #include "driver/bk4819.h"
+#include "driver/bk4819-regs.h"
+#include "driver/systick.h"
 #include "driver/system.h"
 #include "audio.h"
 #include "functions.h"
@@ -23,19 +25,10 @@ uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving aud
 uint8_t  gInterceptorMeterPercent = 0;    // 0-100, how full the sweep meter should be
 bool     gInterceptorTxOverrideActive = false; // true while transmitting on a grid channel via PTT override
 
-// Moved up here (was declared later, right next to Handle_Active_Channel_Dwell)
-// so INTERCEPTOR_DeleteAndBlacklist/DeleteOnly below can also reset this -
-// without that, deleting the cell currently being actively dwelled on left
-// the engine permanently stuck thinking something was still active, since
-// gInterceptorActiveFrequency was never cleared and this reply-wait state
-// wasn't either.
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
 bool     gInterceptorBandSweepActive = false;
 
-// VHF/UHF Land Mobile default to enabled, matching this feature's original
-// fixed behavior before band selection existed - so anyone who never
-// touches the new selection screen gets the same sweep as before.
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  500,  "Ham 6m",      false },
     { 14400000, 14800000, 500,  "Ham 2m",      false },
@@ -51,88 +44,69 @@ SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
 uint8_t gBandSelectHighlight = 0;
 bool    gBandSelectEnteringFreq = false;
 uint8_t gBandSelectEnteringWhich = 0;
-uint8_t gBandSelectStepOptionIndex = 4; // starts on 12.5kHz (index 4) - a reasonable general default
+uint8_t gBandSelectStepOptionIndex = 4;
 const uint32_t gStepOptions[STEP_OPTION_COUNT] = { 250, 500, 625, 1000, 1250, 2000, 2500 };
 bool    gExcludeNoaa = false;
-bool    gInterceptorPendingBlacklistBuzz = false; // played once gCurrentFunction actually leaves FUNCTION_RECEIVE
-bool    gSweepNeedsReinit = true; // forces the sweep to (re)initialize from the current selection
+bool    gInterceptorPendingBlacklistBuzz = false;
+bool    gSweepNeedsReinit = true;
 bool     gInterceptorHuntTickerActive = false;
 uint32_t gInterceptorHuntTickerFreq = 0;
 int8_t   gInterceptorFlashSlot = -1;
 uint8_t  gInterceptorFlashCount = 0;
-int16_t  gInterceptorCheckingSlot = -1; // -1 = nothing currently being checked
+int16_t  gInterceptorCheckingSlot = -1;
 
-// ---------------------------------------------------------------------
-// Checking a candidate frequency: this now properly repoints the REAL
-// current RX VFO (gRxVfo), exactly the way this firmware's own built-in
-// scanner does it (see app/chFrScanner.c NextFreqChannel), instead of
-// calling BK4819_SetFrequency() directly. That earlier approach left the
-// rest of the firmware still believing whatever gRxVfo already was (e.g.
-// VFO A) was what's being listened to, since gRxVfo itself never changed -
-// so real audio and real squelch detection kept reflecting gRxVfo's real
-// channel, never whatever frequency we were actually trying to check.
-// Detection is now the real gCurrentFunction == FUNCTION_INCOMING signal
-// (the actual hardware squelch decision), not a guessed RSSI/noise/glitch
-// threshold.
-// ---------------------------------------------------------------------
-
-// How long to wait after retuning before trusting FUNCTION_INCOMING as a
-// real result - matches this firmware's own real scanner pacing
-// (scan_pause_delay_in_6_10ms = 100ms), not an arbitrary guess.
-// Matches this firmware's own real scanner pacing (scan_pause_delay_in_6_10ms
-// = 100ms). A previous attempt doubled this to fix missed detections, but
-// the real cause was checking only for FUNCTION_INCOMING and missing the
-// natural progression to FUNCTION_RECEIVE (see Check_Candidate_Frequency) -
-// reverted back down now that the actual bug is fixed, since the longer
-// wait was also making scanning noticeably slower for no real benefit.
 #define CANDIDATE_SETTLE_10MS_TICKS  10
 
 enum { CANDCHECK_IDLE, CANDCHECK_WAITING };
 
-// Bundles one independent settle-timer instance. Band sweep and grid-check
-// now run interleaved with each other (see INTERCEPTOR_Engine_Tick), and
-// previously shared one single state machine - meaning one process's
-// still-settling wait could get silently hijacked mid-sequence by the
-// other's call, resulting in a result being credited to whichever
-// candidate the *other* process had actually left the radio tuned to.
-// Each caller now gets its own instance so they can never collide.
 typedef struct {
     uint8_t  state;
     uint16_t settleCountdown;
 } CandCheckState_t;
 
-static CandCheckState_t sGridCheckState = { CANDCHECK_IDLE, 0 }; // shared by grid-check + fast-scan (never concurrent with each other)
-static CandCheckState_t sSweepCheckState = { CANDCHECK_IDLE, 0 }; // band sweep's own, independent
+static CandCheckState_t sGridCheckState = { CANDCHECK_IDLE, 0 };
+static CandCheckState_t sSweepCheckState = { CANDCHECK_IDLE, 0 };
 
 static void Tune_RxVfo_To(uint32_t freq, uint8_t codeType, uint8_t code) {
     gRxVfo->freq_config_RX.Frequency = freq;
-    // This was the actual bug behind audio cutting out after ~1 second
-    // unless VFO A already happened to be on the same channel: we were
-    // only ever changing the frequency, never the CTCSS/DCS tone-matching
-    // fields, so the real squelch decoder kept checking against whatever
-    // tone was left over from VFO A's PREVIOUS channel - completely
-    // unrelated to whatever grid cell we were actually checking. Initial
-    // carrier-open audio would play briefly, then the real tone-mismatch
-    // logic would correctly (from its own perspective) re-mute it.
     gRxVfo->freq_config_RX.CodeType = codeType;
     gRxVfo->freq_config_RX.Code     = code;
-    // Force narrow bandwidth specifically for our own checks - this wasn't
-    // being touched before, so every check inherited whatever bandwidth
-    // gRxVfo already had (often WIDE). A wide receive filter means tuning
-    // to any one of several closely-spaced saved channels can still pick
-    // up the same real signal, which is why different cells were lighting
-    // up inconsistently for what should be one consistent transmission.
     gRxVfo->CHANNEL_BANDWIDTH = BK4819_FILTER_BW_NARROW;
     RADIO_ApplyOffset(gRxVfo);
     RADIO_ConfigureSquelchAndOutputPower(gRxVfo);
     RADIO_SetupRegisters(true);
 }
 
-// Call with the candidate frequency you want checked. Returns:
-//   0 = still settling, caller should do nothing else this tick
-//   1 = confirmed active (real squelch opened - FUNCTION_INCOMING)
-//   2 = confirmed not active, ready to move to the next candidate
-// Non-blocking - one step per call, same as everything else here.
+// Fast, RSSI-only pre-check - mirrors the stock spectrum analyzer's own
+// retune (app/spectrum.c's SetF()/GetRssi()), reading RSSI almost
+// immediately after retuning rather than waiting through the full,
+// deliberate ~100ms settle Check_Candidate_Frequency below uses. This
+// deliberately checks LESS carefully - it only rules out clearly-empty
+// spectrum quickly. Anything that reads strong enough here still goes
+// through the full, careful settle-and-verify below before ever being
+// trusted or saved. The register-0x63 wait matters: reading RSSI the
+// instant after retuning returns a not-yet-valid value, which could read
+// as "nothing here" regardless of whether a signal is actually present -
+// this is the same minimal wait the stock spectrum analyzer's own
+// GetRssi() uses, not the long deliberate settle.
+// This is deliberately the ONLY change from the known-good baseline this
+// file was restored to - no silent verification window, no grace period,
+// no glitch sampling. Just the plain check, so it can be tested in
+// isolation before anything else is considered.
+#define SWEEP_RSSI_FALLBACK_DBM (-100) // deliberately permissive but clear of noise floor - only a first gate, not a confirmation
+static bool Fast_Rssi_Precheck(uint32_t freq) {
+    BK4819_SetFrequency(freq);
+    BK4819_PickRXFilterPathBasedOnFrequency(freq);
+    uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
+    BK4819_WriteRegister(BK4819_REG_30, 0);
+    BK4819_WriteRegister(BK4819_REG_30, reg);
+    uint16_t guard = 0;
+    while ((BK4819_ReadRegister(0x63) & 0xFF) >= 255 && guard++ < 32) {
+        SYSTICK_DelayUs(100);
+    }
+    return BK4819_GetRSSI_dBm() > SWEEP_RSSI_FALLBACK_DBM;
+}
+
 static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, uint8_t codeType, uint8_t code) {
     if (st->state == CANDCHECK_IDLE) {
         Tune_RxVfo_To(freq, codeType, code);
@@ -140,66 +114,27 @@ static uint8_t Check_Candidate_Frequency(CandCheckState_t *st, uint32_t freq, ui
         st->settleCountdown = CANDIDATE_SETTLE_10MS_TICKS;
         return 0;
     }
-    if (st->settleCountdown > 0) return 0; // still counting down (see INTERCEPTOR_TimeSlice10ms)
+    if (st->settleCountdown > 0) return 0;
 
     st->state = CANDCHECK_IDLE;
-    // FUNCTION_RECEIVE included, not just FUNCTION_INCOMING - a confirmed
-    // signal naturally progresses from INCOMING to RECEIVE shortly after
-    // (that transition is what actually unmutes audio), so checking only
-    // for INCOMING meant a real, fully-confirmed signal could already have
-    // moved past the state we were looking for by the time our settle
-    // timer expired - no amount of waiting longer would have caught that,
-    // which matches audio playing briefly but the check still reporting
-    // "not active" every time.
     if (gCurrentFunction == FUNCTION_INCOMING || gCurrentFunction == FUNCTION_RECEIVE) {
-        // APP_StartListening() moved out to each caller instead of being
-        // called here directly - AUDIO_PlayBeep() has a hardcoded gate
-        // (confirmed in audio.c) that silently refuses to play anything
-        // once gCurrentFunction == FUNCTION_RECEIVE. Calling
-        // APP_StartListening() here, before the caller gets a chance to
-        // play a new-capture beep, meant that beep was silently swallowed
-        // every single time - confirmed as the exact reason band sweep's
-        // capture beep was never audible, while hunt's was (hunt never
-        // touches gCurrentFunction at all, so it was never affected).
         return 1;
     }
     return 2;
 }
 
-// Real signal STRENGTH (RSSI) correctly stays steady for a well-received
-// signal - it doesn't fluctuate with speech - which is why the meter looked
-// "stuck" even though reception was working fine. What's actually needed
-// is the DEMODULATED AUDIO level. BK4819_GetVoiceAmplitudeOut() (used for
-// the TX meter) is confirmed TX-only by its one real usage in this
-// firmware (ui/main.c explicitly gates it to FUNCTION_TRANSMIT). The only
-// other candidate, BK4819_GetAfTxRx() ("Audio Frequency Tx/Rx"), exists in
-// the driver but has ZERO real usage anywhere in this firmware to learn
-// scaling from - unlike the TX fix, this is a genuine experiment, not a
-// confirmed-good port of real behavior. Expect this range to need real
-// hardware tuning.
-#define AF_LEVEL_MAX  63  // assumed from the 6-bit register mask - unverified
+#define AF_LEVEL_MAX  63
 
 static void Update_Meter_Level(void) {
     uint8_t af = BK4819_GetAfTxRx();
-    // Real-world testing showed this backwards: silence pinned the meter
-    // to full/black, loud audio pushed it toward empty. That means this
-    // register is inversely related to audio level - lower during strong
-    // signal, higher during silence/noise - the opposite of what we
-    // assumed going in (flagged at the time as a real risk of using this
-    // experimental, unverified register). Inverting it here.
     uint8_t afInverted = (af > AF_LEVEL_MAX) ? 0 : (AF_LEVEL_MAX - af);
     uint32_t pct = ((uint32_t)afInverted * 100) / AF_LEVEL_MAX;
     if (pct > 100) pct = 100;
-    // Same 10% floor + 10-100% scaling as before.
     gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
 }
 
-// Defined in app/interceptor.c - needed here for Snap_Cursor_To_Slot.
 extern uint8_t gInterceptorHighlight;
 
-// Moves the cursor and page to match whatever slot just became active -
-// so the selection box always shows where the most recent activity was,
-// even after it ends, without needing to manually navigate there.
 static void Snap_Cursor_To_Slot(uint16_t idx) {
     if (idx >= GRID_TOTAL_SLOTS) return;
     gCurrentGridPage = (uint8_t)(idx / GRID_PAGE_SIZE);
@@ -212,12 +147,9 @@ uint8_t INTERCEPTOR_GetUsedPageCount(void) {
         if (gScanList[i].Frequency != 0)
             return (uint8_t)(i / GRID_PAGE_SIZE) + 1;
     }
-    return 1; // always show at least page 1, even if empty
+    return 1;
 }
 
-// One page ahead of actual content - so there's always a next, empty page
-// ready to navigate into and add to, rather than only becoming reachable
-// once something has already been captured into it.
 uint8_t INTERCEPTOR_GetReachablePageCount(void) {
     uint8_t used = INTERCEPTOR_GetUsedPageCount();
     uint8_t reachable = used + 1;
@@ -237,12 +169,6 @@ void INTERCEPTOR_SortByPopularity(void) {
     }
 }
 
-// How close two frequencies need to be to count as "the same channel" for
-// duplicate detection. Measurement jitter can round the same real signal
-// to a slightly different value from one detection to the next - without
-// this tolerance, that jitter looks like a brand-new frequency every time.
-// 10000 = 100kHz in this firmware's 10Hz-per-count units - a starting
-// guess, not hardware-calibrated.
 #define FREQ_DEDUP_TOLERANCE  10000
 
 static uint16_t sLastEvictedSlot = 0xFFFF;
@@ -252,7 +178,7 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
         uint32_t existing = gScanList[i].Frequency;
         if (existing == 0) continue;
         uint32_t delta = (existing > freq) ? (existing - freq) : (freq - existing);
-        if (delta <= FREQ_DEDUP_TOLERANCE) return; // close enough to count as already-have-it
+        if (delta <= FREQ_DEDUP_TOLERANCE) return;
     }
 
     uint16_t target = 0xFFFF;
@@ -268,17 +194,13 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
                 target = i;
             }
         }
-        // If the lowest-hit-count slot is the exact same one evicted last
-        // time, and something else ties with it, prefer the other one -
-        // otherwise a run of near-simultaneous new detections can keep
-        // thrashing the same slot over and over instead of spreading out.
         if (target == sLastEvictedSlot) {
             for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
                 if (gScanList[i].IsLocked || i == sLastEvictedSlot) continue;
                 if (gScanList[i].HitCount == lowest_hits) { target = i; break; }
             }
         }
-        if (target == 0xFFFF) return; // every slot is locked, nothing to evict
+        if (target == 0xFFFF) return;
     }
 
     sLastEvictedSlot = target;
@@ -287,26 +209,21 @@ void INTERCEPTOR_LogNewCapture(uint32_t freq, uint8_t codeType, uint8_t code) {
     gScanList[target].CodeType  = codeType;
     gScanList[target].Code      = code;
     gInterceptorFlashSlot  = (int8_t)target;
-    gInterceptorFlashCount = 6; // a few blink cycles before settling to normal display
-    AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP); // always plays - not gated by the global beep setting
-    gUpdateDisplay = true; // new capture won't show up on screen otherwise
+    gInterceptorFlashCount = 6;
+    AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP);
+    gUpdateDisplay = true;
 }
 
 void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex, bool playDefaultBeep) {
     if (slotIndex >= GRID_TOTAL_SLOTS) return;
-    if (gScanList[slotIndex].Frequency == 0) return; // nothing there
+    if (gScanList[slotIndex].Frequency == 0) return;
 
     uint32_t freq = gScanList[slotIndex].Frequency;
 
     if (!gScanList[slotIndex].IsLocked) {
-        // only auto-detected slots get blacklisted - a manually-added crew
-        // channel being removed just means "not monitoring it this event",
-        // not "this frequency is noise"
         if (gLockoutCount < MAX_LOCKOUTS) {
             gLockoutList[gLockoutCount++] = freq;
         } else {
-            // list is full - overwrite the oldest entry rather than
-            // silently refusing to blacklist anything further
             memmove(&gLockoutList[0], &gLockoutList[1], (MAX_LOCKOUTS - 1) * sizeof(uint32_t));
             gLockoutList[MAX_LOCKOUTS - 1] = freq;
         }
@@ -314,11 +231,6 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex, bool playDefaultBeep) {
 
     memset(&gScanList[slotIndex], 0, sizeof(InterceptorChannel_t));
 
-    // If this was the cell currently being actively dwelled on (e.g. a
-    // persistent noise source that never lets up), clear the dwell state
-    // too - otherwise the engine gets stuck forever thinking something is
-    // still active on a frequency that no longer exists in the grid, and
-    // scanning never resumes no matter what mode you toggle afterward.
     if (gInterceptorActiveFrequency == freq) {
         gInterceptorActiveFrequency = 0;
         sWaitingForReply = false;
@@ -328,12 +240,9 @@ void INTERCEPTOR_DeleteAndBlacklist(uint16_t slotIndex, bool playDefaultBeep) {
         AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-// Just clears the slot - no blacklist entry at all, even for auto-detected
-// channels. Distinct from INTERCEPTOR_DeleteAndBlacklist: this is for "get
-// rid of this quickly," that one is for "this is noise, never show it again."
 void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     if (slotIndex >= GRID_TOTAL_SLOTS) return;
-    if (gScanList[slotIndex].Frequency == 0) return; // nothing there
+    if (gScanList[slotIndex].Frequency == 0) return;
 
     uint32_t freq = gScanList[slotIndex].Frequency;
     memset(&gScanList[slotIndex], 0, sizeof(InterceptorChannel_t));
@@ -346,95 +255,34 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-// ---------------------------------------------------------------------
-// Carrier-pause scan behavior: when a channel goes active, stay on it and
-// keep listening. When it goes quiet, don't resume scanning immediately -
-// wait a few seconds for a possible reply first, same as this firmware's
-// real carrier-pause scan mode. The wait is timed against a genuine 10ms
-// system tick (see INTERCEPTOR_TimeSlice10ms, called from
-// APP_TimeSlice10ms) rather than raw loop iterations, since loop speed
-// varies with whatever else the radio is doing.
-// ---------------------------------------------------------------------
-
-#define REPLY_WAIT_10MS_TICKS  0  // grid-check cycles back through the saved list quickly enough on its own to catch a reply, without needing a dedicated wait here
-#define METER_REDRAW_10MS_TICKS 10  // ~100ms between meter redraws
-#define TICKER_REDRAW_10MS_TICKS 15 // ~150ms between ticker/flash redraws
-#define MAX_DWELL_10MS_TICKS 800   // ~8 seconds - adjust to taste
-#define NOISE_CHECK_10MS_TICKS 300     // ~3 seconds of samples before judging - unverified starting guess
-#define NOISE_VARIANCE_THRESHOLD 20     // meter range below this over the check window = "flat"
-#define NOISE_LOUD_THRESHOLD 30        // meter max above this = "loud" - flat+quiet could just be a calm voice
-#define NOISE_EARLY_EXIT_10MS_TICKS 100 // ~1 more second, then give up, once flagged as noise-like
-#define NOISE_FLAGS_BEFORE_BLACKLIST 3 // consecutive flat+loud dwells on the same cell before auto-blacklisting it
-#define NOISE_STEP_DELTA_THRESHOLD 2   // largest single sample-to-sample jump that still counts as "smooth" (catches gradual drift, not just dead-flat)
-#define NOISE_CROSSPASS_TOLERANCE 4    // how close two passes' average levels need to be to count as "the same source, still there"
-// Pause detection: the meter's floor while genuinely receiving is 10 (see
-// Update_Meter_Level) - real speech has silent gaps between words/phrases
-// that should drop close to that floor; a noise source that "never takes
-// a break" won't. If the lowest reading seen anywhere in the sample window
-// drops to or below this, that's treated as decisive evidence of a pause
-// and overrides the flat+loud determination entirely, even if the rest of
-// the signal otherwise looked exactly like noise.
+#define REPLY_WAIT_10MS_TICKS  0
+#define METER_REDRAW_10MS_TICKS 10
+#define TICKER_REDRAW_10MS_TICKS 15
+#define MAX_DWELL_10MS_TICKS 800
+#define NOISE_CHECK_10MS_TICKS 300
+#define NOISE_VARIANCE_THRESHOLD 20
+#define NOISE_LOUD_THRESHOLD 30
+#define NOISE_EARLY_EXIT_10MS_TICKS 100
+#define NOISE_FLAGS_BEFORE_BLACKLIST 3
+#define NOISE_STEP_DELTA_THRESHOLD 2
+#define NOISE_CROSSPASS_TOLERANCE 4
 #define NOISE_PAUSE_THRESHOLD 20
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
 static uint16_t sDwellDurationCountdown = 0;
 
-// Called once per real 10ms system tick from APP_TimeSlice10ms().
 void INTERCEPTOR_TimeSlice10ms(void) {
     if (sGridCheckState.state == CANDCHECK_WAITING && sGridCheckState.settleCountdown > 0)
         sGridCheckState.settleCountdown--;
     if (sSweepCheckState.state == CANDCHECK_WAITING && sSweepCheckState.settleCountdown > 0)
         sSweepCheckState.settleCountdown--;
 
-    // AUDIO_PlayBeep() silently refuses to play anything while
-    // gCurrentFunction == FUNCTION_RECEIVE - the auto-blacklist buzz gets
-    // triggered mid-dwell (still receiving), so it can't play immediately.
-    // Checked every real tick and played the instant we're actually clear.
     if (gInterceptorPendingBlacklistBuzz && gCurrentFunction != FUNCTION_RECEIVE) {
         AUDIO_PlayBeep(BEEP_440HZ_500MS);
         gInterceptorPendingBlacklistBuzz = false;
     }
 
-    // Maximum dwell time - some channels (NOAA weather radio, constant
-    // noise/interference) never actually stop transmitting, which would
-    // otherwise hang the scan on that one frequency forever, with no way
-    // to find or save anything else. After this cap, force-resume scanning
-    // regardless of continued activity. The channel stays saved either way
-    // - it'll get re-detected and dwelled on again naturally next time it
-    // comes up in rotation, which is the right behavior for something
-    // that's legitimately busy rather than needing to be blacklisted.
-    //
-    // Noise-vs-voice heuristic: real speech naturally varies in level
-    // (pauses, changing loudness), while steady interference/carriers/tones
-    // tend to stay flat. A signal that's flat AND quiet could just be a
-    // calm, weak voice though - it's specifically flat AND LOUD that's a
-    // much stronger noise indicator, since real speech doesn't sit pinned
-    // high with zero variation.
-    //
-    // "Flat" is checked two ways: the overall min/max range over the
-    // sample window, AND the largest single sample-to-sample jump. Some
-    // noise sources drift gradually (slowly rising/falling over many
-    // seconds) without ever taking the rapid, choppy jumps real speech
-    // does - the overall range alone could miss that and mistake slow
-    // drift for genuine variation, so either check flags it as smooth.
-    //
-    // Cross-pass consistency: if the SAME saved cell's average level looks
-    // similar from one flagged pass to the next, that's corroborating
-    // evidence of an unchanging source - a real conversation encountered
-    // repeatedly would vary (different people, different volume), a
-    // persistent noise source generally wouldn't. A meaningfully different
-    // level restarts the streak at 1 rather than discarding it entirely,
-    // since it's still flat+loud right now, just possibly a different
-    // source or a genuine change.
-    //
-    // After a few seconds of samples, a flagged dwell shortens the
-    // remaining wait instead of the full timeout. If the same cell gets
-    // flagged NOISE_FLAGS_BEFORE_BLACKLIST times in a row, it's auto-
-    // blacklisted - one flagged pass alone never blacklists anything. Any
-    // normal-variance (or quiet) dwell resets the count back to zero.
-    // Still a heuristic, not a real classifier - thresholds are starting
-    // guesses that will need real-world tuning.
     {
         static bool sWasDwelling = false;
         static uint8_t sDwellMeterMin = 255;
@@ -492,8 +340,6 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                     uint8_t avgLevel = (sDwellSampleCount > 0)
                         ? (uint8_t)(sDwellMeterSum / sDwellSampleCount) : 0;
 
-                    // Find which saved slot this dwell frequency belongs to,
-                    // to track its consecutive flag count.
                     uint16_t dwellSlot = 0xFFFF;
                     for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
                         if (gScanList[i].Frequency == gInterceptorActiveFrequency) { dwellSlot = i; break; }
@@ -516,7 +362,7 @@ void INTERCEPTOR_TimeSlice10ms(void) {
 
                             if (gScanList[dwellSlot].NoiseFlagCount >= NOISE_FLAGS_BEFORE_BLACKLIST) {
                                 INTERCEPTOR_DeleteAndBlacklist(dwellSlot, false);
-                                gInterceptorPendingBlacklistBuzz = true; // played once we've actually left FUNCTION_RECEIVE - see INTERCEPTOR_TimeSlice10ms
+                                gInterceptorPendingBlacklistBuzz = true;
                                 gInterceptorActiveFrequency = 0;
                                 sWaitingForReply = false;
                                 gUpdateDisplay = true;
@@ -536,30 +382,15 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         sReplyWaitCountdown--;
         if (sReplyWaitCountdown == 0) {
             sWaitingForReply = false;
-            gInterceptorActiveFrequency = 0; // give up waiting, resume scanning
+            gInterceptorActiveFrequency = 0;
             INTERCEPTOR_SortByPopularity();
-            gUpdateDisplay = true; // clear the invert highlight from screen
+            gUpdateDisplay = true;
         }
     }
 
-    // While a channel is actively being listened to, redraw the meter at a
-    // throttled rate (not every single main-loop tick, which would hammer
-    // the screen far more than needed) so the sweep visibly animates with
-    // the live signal level.
     if (gInterceptorActiveFrequency != 0 || gInterceptorTxOverrideActive) {
         if (gInterceptorTxOverrideActive) {
-            // TX: sample live mic/modulation level instead of RX RSSI.
-            // Simple linear scaling - this firmware's own real mic-bar
-            // feature (ui/main.c) uses a non-linear sqrt curve for better
-            // low-volume sensitivity, but that helper isn't exposed
-            // anywhere we can reuse it from, so this is a simpler
-            // approximation using the same underlying real function.
             uint16_t amp = BK4819_GetVoiceAmplitudeOut();
-            // The real mic-bar feature (ui/main.c) multiplies this reading
-            // by 8, which is where this started - but that wasn't enough
-            // for normal speech on this radio in practice, so this has been
-            // bumped up further based on actual hardware testing (8 -> 32
-            // -> 64). Adjust further if still not sensitive enough.
             uint32_t boosted = (uint32_t)amp * 64;
             if (boosted > 65535) boosted = 65535;
             uint32_t pct = (boosted * 100) / 65535;
@@ -574,12 +405,6 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             sMeterRedrawCountdown = METER_REDRAW_10MS_TICKS;
 
             if (gInterceptorTxOverrideActive) {
-                // The normal gUpdateDisplay -> GUI_DisplayScreen() path
-                // doesn't seem to actually refresh the screen during an
-                // active transmission - this firmware's own real mic-bar
-                // feature has the same problem and works around it by
-                // calling its draw function and blitting directly instead
-                // of relying on the flag. Mirroring that here.
                 UI_DisplayInterceptorGridPage();
             } else {
                 gUpdateDisplay = true;
@@ -587,9 +412,6 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         }
     }
 
-    // Live hunt ticker and new-capture flash - both need periodic redraws
-    // to actually animate, same throttled-real-tick approach as the meter
-    // above, kept separate since neither of these cares about TX/RX level.
     if (gInterceptorHuntTickerActive || gInterceptorFlashCount > 0) {
         if (sTickerRedrawCountdown > 0) {
             sTickerRedrawCountdown--;
@@ -601,12 +423,6 @@ void INTERCEPTOR_TimeSlice10ms(void) {
     }
 }
 
-// Shared by both scan modes: call while dwelling on gInterceptorActiveFrequency.
-// Returns true if the caller should keep dwelling (stay tuned, do nothing else
-// this tick), false once it's truly time to resume scanning. Uses the real
-// gCurrentFunction state - gRxVfo is already pointed at this frequency from
-// when it was first confirmed active, so real reception continues on its own;
-// this is just bookkeeping for when to give up and move on.
 static bool Handle_Active_Channel_Dwell(void) {
     if (gCurrentFunction == FUNCTION_INCOMING || gCurrentFunction == FUNCTION_RECEIVE) {
         sWaitingForReply = false;
@@ -615,13 +431,6 @@ static bool Handle_Active_Channel_Dwell(void) {
 
     if (!sWaitingForReply) {
         if (REPLY_WAIT_10MS_TICKS == 0) {
-            // No wait at all - resume scanning immediately. Handled as a
-            // special case since the countdown-expiry logic below only
-            // fires when it decrements down TO zero; starting already at
-            // zero would never trigger that and get stuck waiting forever.
-            // Callers ignore this function's return value, so the dwell
-            // state has to actually be cleared here directly, matching
-            // exactly what the normal countdown-completion path does.
             gInterceptorActiveFrequency = 0;
             INTERCEPTOR_SortByPopularity();
             gUpdateDisplay = true;
@@ -632,18 +441,9 @@ static bool Handle_Active_Channel_Dwell(void) {
         return true;
     }
 
-    // already waiting - INTERCEPTOR_TimeSlice10ms() handles the countdown
-    // and will clear gInterceptorActiveFrequency once it hits zero
     return gInterceptorActiveFrequency != 0;
 }
 
-// Hunt: non-blocking, one poll per call, mirroring this firmware's own
-// built-in scanner (app/scanner.c). Requires the same frequency 3 times in
-// a row before accepting it, then polls for a CTCSS/DCS tone the same way.
-// This part still uses the BK4819 frequency-counter directly (a genuinely
-// different hardware feature - measuring an unknown nearby signal's exact
-// frequency - not "is gRxVfo's frequency active", so it isn't affected by
-// the gRxVfo-conflict this rewrite fixes elsewhere).
 enum { HUNT_IDLE, HUNT_FREQ, HUNT_CSS };
 static uint8_t  sHuntState = HUNT_IDLE;
 static uint32_t sHuntFrequency = 0;
@@ -666,12 +466,6 @@ static void Hunt_Reset(void) {
 
 static void Do_Hunt_Cycle(void) {
     if (sHuntState == HUNT_IDLE) {
-        // This firmware's own real scanner always calls this before
-        // enabling the frequency counter - it selects the correct RF
-        // front-end filter path for whatever frequency range is currently
-        // in use. We were missing this entirely, which is the confirmed
-        // cause of harmonic/image frequency misdetection (e.g. capturing
-        // a transmitted frequency as roughly double its real value).
         BK4819_PickRXFilterPathBasedOnFrequency(gRxVfo->pRX->Frequency);
         BK4819_EnableFrequencyScan();
         sHuntState = HUNT_FREQ;
@@ -714,7 +508,7 @@ static void Do_Hunt_Cycle(void) {
         BK4819_SetScanFrequency(sHuntFrequency);
         sHuntCssAttempts = 0;
         sHuntState = HUNT_CSS;
-        gInterceptorHuntTickerActive = false; // stopped on a stable candidate - not "scrolling" anymore
+        gInterceptorHuntTickerActive = false;
         gUpdateDisplay = true;
         return;
     }
@@ -756,12 +550,6 @@ static void Do_Hunt_Cycle(void) {
     }
 }
 
-// One "grid check" cycle: properly repoints gRxVfo to the next saved slot
-// in sequence (see Check_Candidate_Frequency) and waits for the real
-// squelch decision, rather than directly polling BK4819 registers while
-// gRxVfo still points elsewhere. A static cursor advances each call so
-// repeated calls walk through the whole grid over time. On a hit, re-sorts
-// by popularity so frequently-active channels bubble toward the top.
 static void Do_GridCheck_Cycle(void) {
     static uint16_t next_slot = 0;
     static uint16_t checking_idx = 0xFFFF;
@@ -773,7 +561,6 @@ static void Do_GridCheck_Cycle(void) {
     }
 
     if (checking_idx == 0xFFFF) {
-        // pick the next populated slot to check
         for (uint16_t tries = 0; tries < GRID_TOTAL_SLOTS; tries++) {
             uint16_t idx = next_slot;
             next_slot = (next_slot + 1) % GRID_TOTAL_SLOTS;
@@ -782,14 +569,14 @@ static void Do_GridCheck_Cycle(void) {
                 break;
             }
         }
-        if (checking_idx == 0xFFFF) { gInterceptorCheckingSlot = -1; return; } // grid is empty
+        if (checking_idx == 0xFFFF) { gInterceptorCheckingSlot = -1; return; }
     }
 
     gInterceptorCheckingSlot = (int16_t)checking_idx;
     gUpdateDisplay = true;
 
     uint8_t result = Check_Candidate_Frequency(&sGridCheckState, gScanList[checking_idx].Frequency, gScanList[checking_idx].CodeType, gScanList[checking_idx].Code);
-    if (result == 0) return; // still settling
+    if (result == 0) return;
 
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
@@ -799,12 +586,9 @@ static void Do_GridCheck_Cycle(void) {
         gUpdateDisplay = true;
     }
     gInterceptorCheckingSlot = -1;
-    checking_idx = 0xFFFF; // done with this one either way, pick a new one next time
+    checking_idx = 0xFFFF;
 }
 
-// Fast grid-only scan used when sniffing is OFF: alternates "VFO A" across
-// even slots and "VFO B" across odd slots, checking one at a time using
-// the same real gRxVfo-based method as grid-check above.
 static void Do_FastGridScan_Cycle(void) {
     static bool use_A = true;
     static int16_t index_A = -2;
@@ -829,7 +613,7 @@ static void Do_FastGridScan_Cycle(void) {
                 break;
             }
         }
-        if (checking_idx == -1) { gInterceptorCheckingSlot = -1; return; } // grid is empty
+        if (checking_idx == -1) { gInterceptorCheckingSlot = -1; return; }
     }
 
     gInterceptorCheckingSlot = checking_idx;
@@ -849,20 +633,6 @@ static void Do_FastGridScan_Cycle(void) {
     checking_idx = -1;
 }
 
-// ---------------------------------------------------------------------
-// Band sweep: steps across whichever bands are currently enabled in
-// gSweepBands (see the band-selection screen, F+5 pressed a second time
-// to confirm and start). Uses the same real gRxVfo-based check as
-// grid-check/fast-scan, so it correctly dwells and lets you actually hear
-// what it finds instead of silently logging and moving on.
-// Each band now carries its own StepSize (see gSweepBands) instead of one
-// fixed value for everything - real channel spacing genuinely differs by
-// band, and a single fixed step was systematically missing channels that
-// don't happen to land on it.
-// ---------------------------------------------------------------------
-
-// Finds the next enabled, valid band after the given index, wrapping
-// around the whole list. Returns 0xFF if nothing is currently enabled.
 static uint8_t Find_Next_Enabled_Band(uint8_t afterIdx) {
     for (uint8_t tries = 0; tries < SWEEP_BAND_COUNT; tries++) {
         afterIdx = (afterIdx + 1) % SWEEP_BAND_COUNT;
@@ -872,10 +642,6 @@ static uint8_t Find_Next_Enabled_Band(uint8_t afterIdx) {
     return 0xFF;
 }
 
-// Jumps freq forward past any currently-excluded sub-range (just NOAA for
-// now, structured so more could be added later). Called both when a band
-// is first entered and after every step, since either could land inside
-// an excluded range.
 static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
     if (gExcludeNoaa && *freq >= NOAA_EXCLUDE_START && *freq <= NOAA_EXCLUDE_END) {
         *freq = NOAA_EXCLUDE_END + stepSize;
@@ -883,8 +649,8 @@ static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
 }
 
 static void Do_BandSweep_Cycle(void) {
-    static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1; // search wraps to 0 first
-    static uint32_t sSweepFreq = 0; // 0 = needs (re)initializing to the current band's start
+    static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1;
+    static uint32_t sSweepFreq = 0;
 
     if (gInterceptorActiveFrequency != 0) {
         gInterceptorHuntTickerActive = false;
@@ -892,16 +658,10 @@ static void Do_BandSweep_Cycle(void) {
         return;
     }
 
-    // Confirming a new selection from the band-select screen sets
-    // gSweepNeedsReinit - without this, the sweep only ever reinitialized
-    // once (when sSweepFreq happened to still be 0), so reconfiguring an
-    // already-running sweep had no real effect until it happened to
-    // naturally wrap back around - which in practice looked like it
-    // required a full power cycle to actually pick up a new selection.
     if (sSweepFreq == 0 || gSweepNeedsReinit) {
         gSweepNeedsReinit = false;
         uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
-        if (next == 0xFF) { sSweepFreq = 0; return; } // nothing enabled - idle until the selection changes
+        if (next == 0xFF) { sSweepFreq = 0; return; }
         sSweepBandIndex = next;
         sSweepFreq = gSweepBands[next].StartFreq;
         Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
@@ -910,8 +670,26 @@ static void Do_BandSweep_Cycle(void) {
     gInterceptorHuntTickerActive = true;
     gInterceptorHuntTickerFreq   = sSweepFreq;
 
+    if (sSweepCheckState.state == CANDCHECK_IDLE) {
+        if (!Fast_Rssi_Precheck(sSweepFreq)) {
+            sSweepFreq += gSweepBands[sSweepBandIndex].StepSize;
+            Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[sSweepBandIndex].StepSize);
+            if (sSweepFreq > gSweepBands[sSweepBandIndex].EndFreq) {
+                uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
+                if (next == 0xFF) {
+                    sSweepFreq = 0;
+                    return;
+                }
+                sSweepBandIndex = next;
+                sSweepFreq = gSweepBands[next].StartFreq;
+                Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
+            }
+            return;
+        }
+    }
+
     uint8_t result = Check_Candidate_Frequency(&sSweepCheckState, sSweepFreq, CODE_TYPE_OFF, 0);
-    if (result == 0) return; // still settling
+    if (result == 0) return;
 
     if (result == 1) {
         bool blacklisted = false;
@@ -920,17 +698,14 @@ static void Do_BandSweep_Cycle(void) {
 
         if (!blacklisted) {
             gInterceptorHuntTickerActive = false;
-            // Beep FIRST, then transition to listening - reversed order
-            // was why this beep was never actually heard (see the note in
-            // Check_Candidate_Frequency above).
-            INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0); // no tone info at this sweep speed
+            INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0);
             gInterceptorActiveFrequency = sSweepFreq;
             for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
                 if (gScanList[i].Frequency == sSweepFreq) { Snap_Cursor_To_Slot(i); break; }
             }
             APP_StartListening(FUNCTION_RECEIVE);
             gUpdateDisplay = true;
-            return; // stay here - don't advance yet, we're dwelling now
+            return;
         }
     }
 
@@ -940,7 +715,7 @@ static void Do_BandSweep_Cycle(void) {
     if (sSweepFreq > gSweepBands[sSweepBandIndex].EndFreq) {
         uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
         if (next == 0xFF) {
-            sSweepFreq = 0; // nothing enabled anymore - re-check next tick
+            sSweepFreq = 0;
             return;
         }
         sSweepBandIndex = next;
@@ -950,19 +725,8 @@ static void Do_BandSweep_Cycle(void) {
 }
 
 void INTERCEPTOR_Engine_Tick(void) {
-    // This firmware's real Dual Watch feature retunes the radio on its own
-    // independent timer, completely regardless of what screen is showing
-    // (confirmed in app/app.c - none of its conditions check gScreenToDisplay
-    // at all). Save/restore runs first, unconditionally, every tick - not
-    // gated behind the grid-screen check below - so restoration on
-    // returning to the main screen always happens even on the very tick
-    // we're about to stop scanning.
-    //
-    // Cross-Band RX/TX is handled the same way, following this firmware's
-    // own real precedent - the built-in scanner (CHFRSCANNER_Start/Stop)
-    // does exactly this same save-disable-restore around its own scanning.
     {
-        static uint8_t sSavedDualWatch  = 0xFF; // 0xFF = nothing currently saved
+        static uint8_t sSavedDualWatch  = 0xFF;
         static uint8_t sSavedCrossBand  = 0xFF;
         if (gScreenToDisplay != DISPLAY_MAIN) {
             if (sSavedDualWatch == 0xFF) sSavedDualWatch = gEeprom.DUAL_WATCH;
@@ -978,23 +742,10 @@ void INTERCEPTOR_Engine_Tick(void) {
                 gEeprom.CROSS_BAND_RX_TX = sSavedCrossBand;
                 sSavedCrossBand = 0xFF;
             }
-            // We directly overwrite gRxVfo->CHANNEL_BANDWIDTH during our own
-            // checks (see Tune_RxVfo_To) - force the same real, full
-            // reconfigure this firmware already uses elsewhere (see
-            // End_Interceptor_PTT) so bandwidth and everything else gets
-            // properly re-derived from the actual stored channel settings,
-            // not just left overwritten from our last check.
             gFlagReconfigureVfos = true;
         }
     }
 
-    // Grid mode IS the scanning - it should only actually run while the
-    // grid screen is genuinely showing. Previously the engine kept
-    // scanning in the background regardless of which screen was displayed,
-    // which meant leaving the grid screen didn't actually stop it, still
-    // risking exactly the kind of conflict the Dual Watch fix above was
-    // meant to prevent. Also gives the status bar's "S" indicator (see
-    // ui/status.c) something exact and honest to key off of.
     if (gScreenToDisplay != DISPLAY_INTERCEPTOR) {
         Hunt_Reset();
         gInterceptorActiveFrequency = 0;
@@ -1005,15 +756,9 @@ void INTERCEPTOR_Engine_Tick(void) {
         return;
     }
 
-    // Never interrupt an actual live transmission.
     if (gCurrentFunction == FUNCTION_TRANSMIT)
         return;
 
-    // FUNCTION_INCOMING is now also OUR OWN success signal while we're
-    // mid-check (see Check_Candidate_Frequency) - only treat it as "leave
-    // this alone" when we're NOT the one who caused it, i.e. when we're
-    // not currently waiting on a candidate check or already dwelling on a
-    // confirmed hit.
     if (gCurrentFunction == FUNCTION_INCOMING
         && sGridCheckState.state != CANDCHECK_WAITING
         && sSweepCheckState.state != CANDCHECK_WAITING
@@ -1024,12 +769,6 @@ void INTERCEPTOR_Engine_Tick(void) {
     if (gInterceptorBandSweepActive) {
         static bool sweepOwnsTuner = true;
 
-        // Whichever process is currently mid-settle keeps the radio until
-        // it actually finishes (accepted or rejected) - both processes
-        // retune the SAME physical radio, so swapping every raw tick
-        // regardless of settle-in-progress let one yank the hardware away
-        // from the other mid-wait, corrupting whichever check was running
-        // even with separate software state for each.
         if (sweepOwnsTuner) {
             Do_BandSweep_Cycle();
             if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
@@ -1039,20 +778,13 @@ void INTERCEPTOR_Engine_Tick(void) {
             if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
                 sweepOwnsTuner = true;
         }
-        return; // mutually exclusive with sniffing/fast-scan below
+        return;
     }
 
     if (gSniffingEnabled) {
-        // Same fix as band-sweep/grid-check: hunt's frequency-counting can
-        // span multiple ticks (waiting for 3 stable reads, then a tone
-        // check), and grid-check retuning away mid-measurement on the old
-        // every-tick swap was corrupting the count - a very plausible
-        // explanation for persistent frequency-doubling even after the
-        // filter-path fix. Whichever one is currently busy keeps the radio
-        // until it actually finishes.
         static bool huntOwnsTuner = true;
         static uint16_t huntTurnTicks = 0;
-        #define HUNT_MAX_TURN_TICKS 150 // ~1.5 seconds - forces a yield to grid-check even mid-attempt
+        #define HUNT_MAX_TURN_TICKS 150
 
         if (huntOwnsTuner) {
             Do_Hunt_Cycle();
@@ -1061,12 +793,6 @@ void INTERCEPTOR_Engine_Tick(void) {
                 huntOwnsTuner = false;
                 huntTurnTicks = 0;
             } else if (huntTurnTicks >= HUNT_MAX_TURN_TICKS) {
-                // Been holding the tuner too long without giving grid-check
-                // a turn - abandon this attempt cleanly (a partial hunt
-                // attempt isn't useful data anyway, it'll just try again
-                // fresh later) and yield, so an ongoing conversation on a
-                // saved cell that paused briefly actually gets a chance to
-                // be re-detected instead of being starved out.
                 Hunt_Reset();
                 huntOwnsTuner = false;
                 huntTurnTicks = 0;
@@ -1077,7 +803,7 @@ void INTERCEPTOR_Engine_Tick(void) {
                 huntOwnsTuner = true;
         }
     } else {
-        Hunt_Reset(); // sniffing is off - make sure hunt state doesn't linger
+        Hunt_Reset();
         Do_FastGridScan_Cycle();
     }
 }
