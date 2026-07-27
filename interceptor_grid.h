@@ -18,6 +18,7 @@ typedef struct {
     uint8_t  HitCount;    // times detected active while sniffing, used for sorting
     uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
     uint8_t  NoiseFlagLevel; // average meter level from the last flagged pass, for cross-pass consistency comparison
+    bool     Muted; // excluded from scan checking without being deleted - toggle with F+STAR
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];
@@ -45,6 +46,7 @@ extern uint8_t  gInterceptorFlashCount;  // remaining flash toggles
 // Currently-being-checked cell, for grid-check and fast-scan - inverts
 // briefly while a specific saved cell is actively being tested.
 extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
+extern int16_t  gInterceptorLastActiveSlot; // -1 = none yet - purely visual, never moves the cursor
 
 // --- Band selection for F+5 sweep ---
 // Presets grounded in real US allocations, kept within the BK4819's actual
@@ -52,8 +54,8 @@ extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checke
 // there's a hard gap 630-760MHz that can't be tuned into at all). Slot 8 is
 // user-configurable "Manual" - StartFreq/EndFreq both 0 means it hasn't
 // been set yet.
-#define SWEEP_BAND_COUNT 9
-#define SWEEP_MANUAL_BAND_INDEX 8
+#define SWEEP_BAND_COUNT 16
+#define SWEEP_MANUAL_BAND_INDEX 15
 
 typedef struct {
     uint32_t StartFreq; // 10Hz units, same convention as everything else here
@@ -62,6 +64,12 @@ typedef struct {
                         // fixed step was systematically missing channels that don't
                         // happen to land on it (confirmed: 146.720 MHz, 5kHz-aligned,
                         // was never reachable on a 12.5kHz grid starting elsewhere)
+    uint8_t  Bandwidth; // BK4819_FILTER_BW_WIDE or _NARROW - forcing narrow universally
+                        // was wrong for ham bands (not subject to the FCC narrowbanding
+                        // mandate, conventionally wide) and the 470-512MHz T-band
+                        // (explicitly exempted from that same mandate)
+    uint8_t  Modulation; // MODULATION_FM for almost everything; MODULATION_AM for the
+                         // civil and military air bands (aviation voice is AM)
     char     Name[12];
     bool     Enabled;   // currently checked for sweeping
 } SweepBand_t;
