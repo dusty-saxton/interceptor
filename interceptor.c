@@ -21,22 +21,22 @@ uint8_t  gUserSelectedChannelIndex = 0;
 uint8_t  gCurrentGridPage = 0;
 bool     gSniffingEnabled = false;
 bool     gInterceptorViewActive = false;
-uint32_t gInterceptorActiveFrequency = 0; // 0 = nothing currently receiving audio
-uint8_t  gInterceptorMeterPercent = 0;    // 0-100, how full the sweep meter should be
-bool     gInterceptorTxOverrideActive = false; // true while transmitting on a grid channel via PTT override
+uint32_t gInterceptorActiveFrequency = 0;
+uint8_t  gInterceptorMeterPercent = 0;
+bool     gInterceptorTxOverrideActive = false;
 
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
 bool     gInterceptorBandSweepActive = false;
 
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
-    { 5000000,  5400000,  1000,  "Ham 6m",      false },
-    { 14400000, 14800000, 2500,  "Ham 2m",      false },
-    { 21900000, 22500000, 2500,  "Ham 1.25m",   false },
+    { 5000000,  5400000,  1000, "Ham 6m",      false },
+    { 14400000, 14800000, 2500, "Ham 2m",      false },
+    { 21900000, 22500000, 2500, "Ham 1.25m",   false },
     { 42000000, 45000000, 2500, "Ham 70cm",    false },
-    { 15000000, 17400000, 1250,  "VHF LandMob", true  },
-    { 40000000, 42000000, 1250,  "UHF Fed",     false },
-    { 45000000, 47000000, 1250,  "UHF LandMob", true  },
+    { 15000000, 17400000, 1250, "VHF LandMob", true  },
+    { 40000000, 42000000, 1250, "UHF Fed",     false },
+    { 45000000, 47000000, 1250, "UHF LandMob", true  },
     { 80600000, 82400000, 1250, "800 PS",      false },
     { 0,        0,        1250, "Manual",      false },
 };
@@ -53,6 +53,7 @@ bool     gInterceptorHuntTickerActive = false;
 uint32_t gInterceptorHuntTickerFreq = 0;
 int8_t   gInterceptorFlashSlot = -1;
 uint8_t  gInterceptorFlashCount = 0;
+int16_t  gInterceptorLastActiveSlot = -1; // passive tick-mark on last-heard cell, never moves the cursor
 int16_t  gInterceptorCheckingSlot = -1;
 
 #define CANDIDATE_SETTLE_10MS_TICKS  10
@@ -80,20 +81,10 @@ static void Tune_RxVfo_To(uint32_t freq, uint8_t codeType, uint8_t code) {
 // Fast, RSSI-only pre-check - mirrors the stock spectrum analyzer's own
 // retune (app/spectrum.c's SetF()/GetRssi()), reading RSSI almost
 // immediately after retuning rather than waiting through the full,
-// deliberate ~100ms settle Check_Candidate_Frequency below uses. This
-// deliberately checks LESS carefully - it only rules out clearly-empty
-// spectrum quickly. Anything that reads strong enough here still goes
-// through the full, careful settle-and-verify below before ever being
-// trusted or saved. The register-0x63 wait matters: reading RSSI the
-// instant after retuning returns a not-yet-valid value, which could read
-// as "nothing here" regardless of whether a signal is actually present -
-// this is the same minimal wait the stock spectrum analyzer's own
-// GetRssi() uses, not the long deliberate settle.
-// This is deliberately the ONLY change from the known-good baseline this
-// file was restored to - no silent verification window, no grace period,
-// no glitch sampling. Just the plain check, so it can be tested in
-// isolation before anything else is considered.
-#define SWEEP_RSSI_FALLBACK_DBM (-100) // deliberately permissive but clear of noise floor - only a first gate, not a confirmation
+// deliberate ~100ms settle Check_Candidate_Frequency below uses.
+// Only rules out clearly-empty spectrum quickly. Anything strong enough
+// still goes through the full settle-and-verify below before being saved.
+#define SWEEP_RSSI_FALLBACK_DBM (-100)
 static bool Fast_Rssi_Precheck(uint32_t freq) {
     BK4819_SetFrequency(freq);
     BK4819_PickRXFilterPathBasedOnFrequency(freq);
@@ -131,15 +122,6 @@ static void Update_Meter_Level(void) {
     uint32_t pct = ((uint32_t)afInverted * 100) / AF_LEVEL_MAX;
     if (pct > 100) pct = 100;
     gInterceptorMeterPercent = (uint8_t)(10 + (pct * 90) / 100);
-}
-
-extern uint8_t gInterceptorHighlight;
-
-static void Snap_Cursor_To_Slot(uint16_t idx) {
-    if (idx >= GRID_TOTAL_SLOTS) return;
-    gCurrentGridPage = (uint8_t)(idx / GRID_PAGE_SIZE);
-    gInterceptorHighlight = (uint8_t)(idx % GRID_PAGE_SIZE);
-    gUpdateDisplay = false;
 }
 
 uint8_t INTERCEPTOR_GetUsedPageCount(void) {
@@ -267,6 +249,11 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define NOISE_STEP_DELTA_THRESHOLD 2
 #define NOISE_CROSSPASS_TOLERANCE 4
 #define NOISE_PAUSE_THRESHOLD 20
+
+// Grid-check runs once per second during sweep - enough to catch any
+// conversation on a saved cell, without constantly stealing the radio
+// away from sweep mid-step. 100 ticks * 10ms = 1 second.
+#define GRID_CHECK_INTERVAL_TICKS 100
 
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
@@ -403,7 +390,6 @@ void INTERCEPTOR_TimeSlice10ms(void) {
             sMeterRedrawCountdown--;
         } else {
             sMeterRedrawCountdown = METER_REDRAW_10MS_TICKS;
-
             if (gInterceptorTxOverrideActive) {
                 UI_DisplayInterceptorGridPage();
             } else {
@@ -475,9 +461,7 @@ static void Do_Hunt_Cycle(void) {
 
     if (sHuntState == HUNT_FREQ) {
         uint32_t result;
-        if (!BK4819_GetFrequencyScanResult(&result)) {
-            return;
-        }
+        if (!BK4819_GetFrequencyScanResult(&result)) return;
 
         int32_t delta = (int32_t)result - (int32_t)sHuntFrequency;
         sHuntFrequency = result;
@@ -485,11 +469,8 @@ static void Do_Hunt_Cycle(void) {
 
         BK4819_DisableFrequencyScan();
 
-        if (delta < 100) {
-            sHuntStableCount++;
-        } else {
-            sHuntStableCount = 0;
-        }
+        if (delta < 100) sHuntStableCount++;
+        else sHuntStableCount = 0;
 
         if (sHuntStableCount < 3) {
             BK4819_EnableFrequencyScan();
@@ -500,10 +481,7 @@ static void Do_Hunt_Cycle(void) {
         for (uint8_t i = 0; i < gLockoutCount; i++)
             if (gLockoutList[i] == sHuntFrequency) { blacklisted = true; break; }
 
-        if (blacklisted) {
-            Hunt_Reset();
-            return;
-        }
+        if (blacklisted) { Hunt_Reset(); return; }
 
         BK4819_SetScanFrequency(sHuntFrequency);
         sHuntCssAttempts = 0;
@@ -581,7 +559,10 @@ static void Do_GridCheck_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
-        Snap_Cursor_To_Slot(checking_idx);
+        gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
+        // Cursor does NOT snap to the active cell - cursor stays where
+        // the user left it so the taskbar always shows their chosen cell's
+        // frequency, not whatever the scanner last heard.
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -625,7 +606,8 @@ static void Do_FastGridScan_Cycle(void) {
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
-        Snap_Cursor_To_Slot(checking_idx);
+        gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
+        // Cursor does NOT snap - stays where user left it.
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -676,10 +658,7 @@ static void Do_BandSweep_Cycle(void) {
             Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[sSweepBandIndex].StepSize);
             if (sSweepFreq > gSweepBands[sSweepBandIndex].EndFreq) {
                 uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
-                if (next == 0xFF) {
-                    sSweepFreq = 0;
-                    return;
-                }
+                if (next == 0xFF) { sSweepFreq = 0; return; }
                 sSweepBandIndex = next;
                 sSweepFreq = gSweepBands[next].StartFreq;
                 Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
@@ -701,7 +680,10 @@ static void Do_BandSweep_Cycle(void) {
             INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0);
             gInterceptorActiveFrequency = sSweepFreq;
             for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
-                if (gScanList[i].Frequency == sSweepFreq) { Snap_Cursor_To_Slot(i); break; }
+                if (gScanList[i].Frequency == sSweepFreq) {
+                    gInterceptorLastActiveSlot = (int16_t)i; // tick-mark, cursor stays put
+                    break;
+                }
             }
             APP_StartListening(FUNCTION_RECEIVE);
             gUpdateDisplay = true;
@@ -714,10 +696,7 @@ static void Do_BandSweep_Cycle(void) {
 
     if (sSweepFreq > gSweepBands[sSweepBandIndex].EndFreq) {
         uint8_t next = Find_Next_Enabled_Band(sSweepBandIndex);
-        if (next == 0xFF) {
-            sSweepFreq = 0;
-            return;
-        }
+        if (next == 0xFF) { sSweepFreq = 0; return; }
         sSweepBandIndex = next;
         sSweepFreq = gSweepBands[next].StartFreq;
         Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[next].StepSize);
@@ -756,8 +735,7 @@ void INTERCEPTOR_Engine_Tick(void) {
         return;
     }
 
-    if (gCurrentFunction == FUNCTION_TRANSMIT)
-        return;
+    if (gCurrentFunction == FUNCTION_TRANSMIT) return;
 
     if (gCurrentFunction == FUNCTION_INCOMING
         && sGridCheckState.state != CANDCHECK_WAITING
@@ -767,12 +745,23 @@ void INTERCEPTOR_Engine_Tick(void) {
         return;
 
     if (gInterceptorBandSweepActive) {
+        // Sweep runs continuously; grid-check gets one full pass through
+        // all saved cells approximately once per second. This prevents
+        // the constant per-tick alternation that was causing sweep to
+        // slow down significantly whenever cells existed (every
+        // alternation costs a full retune to a different frequency).
         static bool sweepOwnsTuner = true;
+        static uint16_t sweepTicksSinceGridCheck = 0;
 
         if (sweepOwnsTuner) {
             Do_BandSweep_Cycle();
-            if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
-                sweepOwnsTuner = false;
+            if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0) {
+                sweepTicksSinceGridCheck++;
+                if (sweepTicksSinceGridCheck >= GRID_CHECK_INTERVAL_TICKS) {
+                    sweepOwnsTuner = false;
+                    sweepTicksSinceGridCheck = 0;
+                }
+            }
         } else {
             Do_GridCheck_Cycle();
             if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)

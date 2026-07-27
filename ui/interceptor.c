@@ -15,6 +15,7 @@ extern int8_t  gInterceptorNameEditIndex; // -1 = not editing
 extern char    gInterceptorNameBuf[7];
 extern bool    gInterceptorEnteringChannel;
 extern uint16_t gInterceptorPreviewChannel;
+extern int16_t  gInterceptorSavedChannelNotify;
 extern bool     gInterceptorScrollPreviewActive;
 extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
@@ -24,7 +25,7 @@ extern bool     gInterceptorHuntTickerActive;
 extern uint32_t gInterceptorHuntTickerFreq;
 extern int8_t   gInterceptorFlashSlot;
 extern uint8_t  gInterceptorFlashCount;
-extern int16_t  gInterceptorCheckingSlot;
+extern int16_t  gInterceptorLastActiveSlot; // -1 = nothing yet; passive tick-mark, never moves the cursor
 
 // gFrameBuffer is FRAME_LINES (7) pages tall, each page = 8 pixels, indexed
 // directly (confirmed against the real UI_PrintString implementation in
@@ -117,6 +118,28 @@ static void Print_Tight_Frequency(uint32_t raw_f, uint8_t x, uint8_t xEnd, uint8
         cursor = Draw_Tight_Glyph(page, cursor, cellRight, frac[i], 6, 0);
 }
 
+// Draws a real diagonal X across a cell (both diagonals, spanning the
+// full 2-page/16px height) - used to mark muted cells as visually
+// "crossed out" without touching their saved data at all.
+static void Draw_Muted_X(uint8_t page, uint8_t x, uint8_t xEnd)
+{
+    uint8_t width = (xEnd >= x) ? (uint8_t)(xEnd - x + 1) : 0;
+    if (width == 0 || page + 1 >= FRAME_LINES) return;
+    for (uint8_t col = 0; col < width; col++) {
+        uint8_t screenCol = (uint8_t)(x + col);
+        if (screenCol >= LCD_WIDTH) break;
+        uint8_t y1 = (uint8_t)(((uint16_t)col * 16) / width);
+        if (y1 > 15) y1 = 15;
+        uint8_t y2 = (uint8_t)(15 - y1);
+
+        if (y1 < 8) gFrameBuffer[page][screenCol]     ^= (uint8_t)(1u << y1);
+        else        gFrameBuffer[page + 1][screenCol] ^= (uint8_t)(1u << (y1 - 8));
+
+        if (y2 < 8) gFrameBuffer[page][screenCol]     ^= (uint8_t)(1u << y2);
+        else        gFrameBuffer[page + 1][screenCol] ^= (uint8_t)(1u << (y2 - 8));
+    }
+}
+
 static void Shift_Text_Up(uint8_t page, uint8_t x1, uint8_t x2, uint8_t pixels)
 {
     if (page >= FRAME_LINES) return;
@@ -179,32 +202,37 @@ void UI_DisplayInterceptorGridPage(void)
     // number (no "total pages", no slash) to leave room for the full mode word.
     char status_str[24];
     uint8_t totalPages = INTERCEPTOR_GetReachablePageCount();
+    uint16_t selIdx = (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
 
-    if (gInterceptorNameEditIndex >= 0) {
-        // Renaming - show the real frequency (and tone, if any) here
-        // instead of the normal mode indicator, since the cell itself is
-        // showing the name being typed and has no room for anything else.
-        // This is also the only way to look up a cell's frequency/tone
-        // once it's already been renamed, without changing the name
-        // (EXIT re-saves it unchanged if nothing was actually edited).
-        uint16_t editIdx = (gCurrentGridPage * GRID_PAGE_SIZE) + gInterceptorHighlight;
-        uint32_t raw_f = gScanList[editIdx].Frequency;
-        uint8_t codeType = gScanList[editIdx].CodeType;
+    if (gInterceptorSavedChannelNotify >= 0) {
+        // Highest priority - lets you see confirmation while still
+        // holding the long-press, so you know when it's safe to let go.
+        sprintf(status_str, "SAVED CH%03u", (unsigned int)(gInterceptorSavedChannelNotify + 1));
+    } else if (gScanList[selIdx].Frequency != 0) {
+        // Always show the highlighted cell's real frequency (and tone, if
+        // any) here, regardless of mode - not just while renaming. This
+        // is also the only way to look up a cell's frequency/tone once
+        // it's already been renamed (the cell itself only has room to
+        // show one or the other, never both).
+        uint32_t raw_f = gScanList[selIdx].Frequency;
+        uint8_t codeType = gScanList[selIdx].CodeType;
 
         if (codeType == CODE_TYPE_CONTINUOUS_TONE) {
-            uint16_t tone = CTCSS_Options[gScanList[editIdx].Code];
+            uint16_t tone = CTCSS_Options[gScanList[selIdx].Code];
             sprintf(status_str, "%u.%03u %u.%uHz",
                     (unsigned int)(raw_f / 100000), (unsigned int)((raw_f % 100000) / 100),
                     tone / 10, tone % 10);
         } else if (codeType == CODE_TYPE_DIGITAL || codeType == CODE_TYPE_REVERSE_DIGITAL) {
             sprintf(status_str, "%u.%03u D%03o",
                     (unsigned int)(raw_f / 100000), (unsigned int)((raw_f % 100000) / 100),
-                    DCS_Options[gScanList[editIdx].Code]);
+                    DCS_Options[gScanList[selIdx].Code]);
         } else {
             sprintf(status_str, "%u.%05u MHz",
                     (unsigned int)(raw_f / 100000), (unsigned int)(raw_f % 100000));
         }
     } else if (gInterceptorBandSweepActive) {
+        // Nothing in the highlighted cell to show - fall back to the
+        // mode/page indicator instead.
         sprintf(status_str, "SCAN ON P%u/%u", gCurrentGridPage + 1, totalPages);
     } else {
         sprintf(status_str, gSniffingEnabled ? "INT ON P%u/%u" : "INT OFF P%u/%u",
@@ -344,19 +372,27 @@ void UI_DisplayInterceptorGridPage(void)
                 }
             }
 
+            if (idx == (uint16_t)gInterceptorLastActiveSlot) {
+                // Small top-right corner mark showing the last cell that
+                // had activity - deliberately independent of the cursor
+                // (which no longer auto-moves here at all), so browsing,
+                // renaming, or entering a channel elsewhere never gets
+                // interrupted by this. Uses bit 0x08 - not used by the
+                // selection box (0x03/0xC0) or the locked underline (0x40).
+                uint8_t markWidth = 4;
+                uint8_t markStart = (xEnd >= markWidth) ? (xEnd - markWidth + 1) : x;
+                for (uint8_t col = markStart; col <= xEnd && col < LCD_WIDTH; col++)
+                    gFrameBuffer[page][col] ^= 0x08;
+            }
+
+            if (gScanList[idx].Muted) {
+                Draw_Muted_X(page, x, xEnd);
+            }
+
             if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 0
                 && (gInterceptorFlashCount % 2) == 0) {
                 // brief full-cell invert flash on a just-saved capture,
                 // alternating on/off each redraw for a blinking effect
-                for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++) {
-                    if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
-                    if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
-                }
-            }
-
-            if (gInterceptorCheckingSlot >= 0 && idx == (uint16_t)gInterceptorCheckingSlot) {
-                // this saved cell is currently being tested by grid-check
-                // or fast-scan - full invert for the brief settle period
                 for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++) {
                     if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
                     if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
