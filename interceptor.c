@@ -139,7 +139,7 @@ static void Snap_Cursor_To_Slot(uint16_t idx) {
     if (idx >= GRID_TOTAL_SLOTS) return;
     gCurrentGridPage = (uint8_t)(idx / GRID_PAGE_SIZE);
     gInterceptorHighlight = (uint8_t)(idx % GRID_PAGE_SIZE);
-    gUpdateDisplay = true;
+    gUpdateDisplay = false;
 }
 
 uint8_t INTERCEPTOR_GetUsedPageCount(void) {
