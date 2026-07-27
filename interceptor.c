@@ -30,13 +30,13 @@ static bool     sWaitingForReply = false;
 bool     gInterceptorBandSweepActive = false;
 
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
-    { 5000000,  5400000,  500,  "Ham 6m",      false },
-    { 14400000, 14800000, 500,  "Ham 2m",      false },
-    { 21900000, 22500000, 500,  "Ham 1.25m",   false },
-    { 42000000, 45000000, 1250, "Ham 70cm",    false },
-    { 15000000, 17400000, 500,  "VHF LandMob", true  },
-    { 40600000, 42000000, 625,  "UHF Fed",     false },
-    { 45000000, 47000000, 625,  "UHF LandMob", true  },
+    { 5000000,  5400000,  1000,  "Ham 6m",      false },
+    { 14400000, 14800000, 2500,  "Ham 2m",      false },
+    { 21900000, 22500000, 2500,  "Ham 1.25m",   false },
+    { 42000000, 45000000, 2500, "Ham 70cm",    false },
+    { 15000000, 17400000, 1250,  "VHF LandMob", true  },
+    { 40000000, 42000000, 1250,  "UHF Fed",     false },
+    { 45000000, 47000000, 1250,  "UHF LandMob", true  },
     { 80600000, 82400000, 1250, "800 PS",      false },
     { 0,        0,        1250, "Manual",      false },
 };
