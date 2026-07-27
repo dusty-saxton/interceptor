@@ -63,8 +63,11 @@ void UI_DisplayWelcome(void)
 		}
 		else
 		{
-			EEPROM_ReadBuffer(0x0EB0, WelcomeString0, 16);
-			EEPROM_ReadBuffer(0x0EC0, WelcomeString1, 16);
+			// Custom build branding instead of the EEPROM-configurable
+			// welcome message - this is firmly our own build at this
+			// point, not stock.
+			strcpy(WelcomeString0, "INTERCEPTOR");
+			strcpy(WelcomeString1, "v1.0");
 		}
 
 		UI_PrintString(WelcomeString0, 0, 127, 0, 10);

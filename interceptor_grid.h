@@ -5,20 +5,20 @@
 #include <stdint.h>
 
 #define GRID_PAGE_SIZE    9
-#define GRID_MAX_PAGES    10
-#define GRID_TOTAL_SLOTS  (GRID_PAGE_SIZE * GRID_MAX_PAGES)
+#define GRID_MAX_PAGES    10                                 // hardware-safe ceiling
+#define GRID_TOTAL_SLOTS  (GRID_PAGE_SIZE * GRID_MAX_PAGES)  // 150
 #define MAX_LOCKOUTS      20
 
 typedef struct {
-    uint32_t Frequency;
-    char     Name[7];
-    uint8_t  CodeType;
-    uint8_t  Code;
-    bool     IsLocked;
-    uint8_t  HitCount;
-    uint8_t  NoiseFlagCount;
-    uint8_t  NoiseFlagLevel;
-    bool     Muted;
+    uint32_t Frequency;   // full precision, in the same units as gTxVfo frequencies
+    char     Name[7];     // 6 chars + null terminator, empty = show frequency instead
+    uint8_t  CodeType;     // CODE_TYPE_OFF / CODE_TYPE_CONTINUOUS_TONE / CODE_TYPE_DIGITAL (see dcs.h)
+    uint8_t  Code;         // CTCSS/DCS code index for CodeType, meaningless if CodeType is OFF
+    bool     IsLocked;    // manually-added channel: never auto-purged or evicted
+    uint8_t  HitCount;    // times detected active while sniffing, used for sorting
+    uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
+    uint8_t  NoiseFlagLevel; // average meter level from the last flagged pass, for cross-pass consistency comparison
+    bool     Muted; // excluded from scan checking without being deleted - toggle with F+STAR
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];
@@ -26,44 +26,70 @@ extern uint32_t gLockoutList[MAX_LOCKOUTS];
 extern uint8_t  gLockoutCount;
 extern uint8_t  gUserSelectedChannelIndex;
 extern uint8_t  gCurrentGridPage;
-extern bool     gSniffingEnabled;
-extern bool     gInterceptorViewActive;
-extern uint32_t gInterceptorActiveFrequency;
-extern uint8_t  gInterceptorMeterPercent;
-extern bool     gInterceptorTxOverrideActive;
-extern bool     gInterceptorBandSweepActive;
+extern bool     gSniffingEnabled;       // true = hunt+grid-check alternation; false = fast grid-only scan
+extern bool     gInterceptorViewActive; // true = grid screen is what's currently shown
+extern uint32_t gInterceptorActiveFrequency; // 0 = nothing currently receiving audio
+extern uint8_t  gInterceptorMeterPercent;    // 0-100, current sweep meter fill level
+extern bool     gInterceptorTxOverrideActive; // true while transmitting on a grid channel via PTT override
+extern bool     gInterceptorBandSweepActive;  // true while the F+5 VHF/UHF band sweep is running
+
+// Live "scanning" ticker - shows the frequency currently being evaluated
+// by hunt's frequency counter, displayed in the next empty grid cell.
 extern bool     gInterceptorHuntTickerActive;
 extern uint32_t gInterceptorHuntTickerFreq;
-extern int8_t   gInterceptorFlashSlot;
-extern uint8_t  gInterceptorFlashCount;
-extern int16_t  gInterceptorCheckingSlot;
-extern int16_t  gInterceptorLastActiveSlot;
 
+// Brief flash on the cell a new capture just landed in, before it settles
+// into its normal display.
+extern int8_t   gInterceptorFlashSlot;   // -1 = nothing currently flashing
+extern uint8_t  gInterceptorFlashCount;  // remaining flash toggles
+
+// Currently-being-checked cell, for grid-check and fast-scan - inverts
+// briefly while a specific saved cell is actively being tested.
+extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
+extern int16_t  gInterceptorLastActiveSlot; // -1 = none yet - purely visual, never moves the cursor
+
+// --- Band selection for F+5 sweep ---
+// Presets grounded in real US allocations, kept within the BK4819's actual
+// tunable range (18-630MHz and 760-1300MHz, confirmed in frequencies.c -
+// there's a hard gap 630-760MHz that can't be tuned into at all). Slot 8 is
+// user-configurable "Manual" - StartFreq/EndFreq both 0 means it hasn't
+// been set yet.
 #define SWEEP_BAND_COUNT 9
 #define SWEEP_MANUAL_BAND_INDEX 8
 
 typedef struct {
-    uint32_t StartFreq;
+    uint32_t StartFreq; // 10Hz units, same convention as everything else here
     uint32_t EndFreq;
-    uint32_t StepSize;
+    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band
     char     Name[12];
-    bool     Enabled;
+    bool     Enabled;   // currently checked for sweeping
 } SweepBand_t;
 
 extern SweepBand_t gSweepBands[SWEEP_BAND_COUNT];
-extern uint8_t gBandSelectHighlight;
-extern bool    gBandSelectEnteringFreq;
-extern uint8_t gBandSelectEnteringWhich;
-extern uint8_t gBandSelectStepOptionIndex;
 
+// Navigation/state for the band-selection screen itself.
+extern uint8_t gBandSelectHighlight;     // which row is highlighted
+extern bool    gBandSelectEnteringFreq;  // true while typing the Manual band's frequencies
+extern uint8_t gBandSelectEnteringWhich; // 0 = typing start freq, 1 = typing end freq, 2 = selecting step size
+extern uint8_t gBandSelectStepOptionIndex; // which entry in the standard step-size list is highlighted
+
+// Standard step sizes offered for the Manual band, in 10Hz units:
+// 2.5, 5, 6.25, 10, 12.5, 20, 25 kHz - covers the same real conventions
+// used across the preset bands.
 #define STEP_OPTION_COUNT 7
 extern const uint32_t gStepOptions[STEP_OPTION_COUNT];
 
+// Exclude NOAA weather channels (162.400-162.550 MHz, the 7 real NOAA
+// channels) from any sweep that would otherwise cover them - independent
+// of which preset band contains that range, so it works whether it's
+// inside VHF Land Mobile or a custom Manual range that happens to overlap.
 #define NOAA_EXCLUDE_START 16240000
 #define NOAA_EXCLUDE_END   16255000
 extern bool gExcludeNoaa;
 extern bool gSweepNeedsReinit;
 
+// One extra row beyond the 9 bands, for the NOAA-exclude toggle - shared
+// between the display and key-handling files.
 #define BAND_SELECT_TOTAL_ROWS (SWEEP_BAND_COUNT + 1)
 #define BAND_SELECT_NOAA_ROW SWEEP_BAND_COUNT
 

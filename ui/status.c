@@ -99,8 +99,13 @@ void UI_DisplayStatus()
 			// Grid mode's own scanning - a separate, safe indicator using
 			// our own screen state, not the real scanner's gScanStateDir
 			// (touching that directly risks arming CHFRSCANNER's own
-			// auto-continuation logic with uninitialized state).
-			UI_PrintStringSmallBufferNormal("S", line + x + 1);
+			// auto-continuation logic with uninitialized state). Blinks to
+			// show the engine is actively alive/running, not just present.
+			static uint8_t sBlinkCounter = 0;
+			sBlinkCounter++;
+			if ((sBlinkCounter / 6) % 2 == 0) {
+				UI_PrintStringSmallBufferNormal("S", line + x + 1);
+			}
 			x1 = x + 10;
 		}
 	}

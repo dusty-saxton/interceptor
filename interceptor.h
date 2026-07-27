@@ -38,6 +38,7 @@ uint8_t INTERCEPTOR_GetReachablePageCount(void);
 // (app/interceptor.c) - registered in ui/ui.c and app/app.c respectively.
 void UI_DisplayInterceptorGridPage(void);
 void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
+void End_Interceptor_PTT(void);
 void UI_DisplayBandSelect(void);
 void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
 

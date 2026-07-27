@@ -211,6 +211,14 @@ void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
                 Begin_Manual_Entry(); // never configured yet - set it up first
             } else {
                 gSweepBands[gBandSelectHighlight].Enabled = !gSweepBands[gBandSelectHighlight].Enabled;
+                if (gBandSelectHighlight == SWEEP_MANUAL_BAND_INDEX
+                    && !gSweepBands[SWEEP_MANUAL_BAND_INDEX].Enabled) {
+                    // Turned off - clear the stored range so next time
+                    // MENU is pressed it prompts for a fresh entry instead
+                    // of just re-toggling the old one back on.
+                    gSweepBands[SWEEP_MANUAL_BAND_INDEX].StartFreq = 0;
+                    gSweepBands[SWEEP_MANUAL_BAND_INDEX].EndFreq    = 0;
+                }
                 gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
                 gUpdateDisplay = true;
             }
