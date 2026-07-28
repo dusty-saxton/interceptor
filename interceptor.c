@@ -263,11 +263,38 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 // away from sweep mid-step. 100 ticks * 10ms = 1 second.
 #define GRID_CHECK_INTERVAL_TICKS 100
 
+// Grid-check scheduling state, shared between INTERCEPTOR_TimeSlice10ms
+// (which owns the TIMING - it's a genuine 10ms tick) and
+// INTERCEPTOR_Engine_Tick (which owns the WORK - it runs from the main
+// loop at a much faster, variable rate).
+//
+// This split matters: previous versions counted the 1-second interval
+// inside Engine_Tick, so "100 ticks" was really 100 main-loop iterations,
+// not 1 second - which is why the cadence never behaved as intended no
+// matter how the counting logic was rearranged. Real time is counted
+// here, in the only place that actually ticks at a known rate.
+static uint16_t sGridCheckIntervalCounter = 0; // counts real 10ms ticks since the last pass
+static bool     sGridPassDue    = false;       // set by the 10ms tick when a pass is owed
+static bool     sGridPassActive = false;       // a pass is currently in progress
+static uint16_t sGridPassIdx    = 0;           // forward-only position in the current pass
+
 static uint16_t sMeterRedrawCountdown = 0;
 static uint16_t sTickerRedrawCountdown = 0;
 static uint16_t sDwellDurationCountdown = 0;
 
 void INTERCEPTOR_TimeSlice10ms(void) {
+    // Once-per-second grid-check scheduler. Counted here because this is
+    // the only function that runs at a known, fixed rate. Only advances
+    // while sweep is actually sweeping - not while dwelling on a signal
+    // and not while a pass is already running - so time spent listening
+    // doesn't bank up a backlog of owed passes.
+    if (gInterceptorBandSweepActive && !sGridPassActive && gInterceptorActiveFrequency == 0) {
+        if (++sGridCheckIntervalCounter >= GRID_CHECK_INTERVAL_TICKS) {
+            sGridCheckIntervalCounter = 0;
+            sGridPassDue = true;
+        }
+    }
+
     // Real-time PTT safety net. GPIO_CheckBit on the PTT pin returns TRUE
     // when the button is RELEASED (confirmed against app/app.c's own
     // handling, which comments the same polarity). End_Interceptor_PTT is
@@ -618,6 +645,59 @@ static void Do_GridCheck_Cycle(void) {
     checking_idx = 0xFFFF;
 }
 
+// One step of a full grid pass, used by sweep mode. Returns true when the
+// pass is finished (every populated cell checked once, a cell locked on,
+// or we're dwelling).
+//
+// The design is deliberately the simplest thing that can be correct:
+// sGridPassIdx only ever moves FORWARD, from 0 to GRID_TOTAL_SLOTS. Every
+// populated cell is therefore visited exactly once, and "pass complete"
+// is simply "index reached the end". Earlier versions tried to detect a
+// complete lap via index wraparound or by counting completions against a
+// target, and both had subtle bugs that let cells be checked twice or the
+// pass never finish at all.
+static bool Do_GridCheck_Pass(void) {
+    if (gInterceptorActiveFrequency != 0) {
+        gInterceptorCheckingSlot = -1;
+        Handle_Active_Channel_Dwell();
+        return true; // dwelling on a signal - pass is over
+    }
+
+    // Skip forward over empty and muted cells.
+    while (sGridPassIdx < GRID_TOTAL_SLOTS
+           && (gScanList[sGridPassIdx].Frequency == 0 || gScanList[sGridPassIdx].Muted))
+        sGridPassIdx++;
+
+    if (sGridPassIdx >= GRID_TOTAL_SLOTS) {
+        gInterceptorCheckingSlot = -1;
+        return true; // walked the whole grid - pass complete
+    }
+
+    gInterceptorCheckingSlot = (int16_t)sGridPassIdx;
+    gUpdateDisplay = true;
+
+    uint8_t result = Check_Candidate_Frequency(&sGridCheckState,
+        gScanList[sGridPassIdx].Frequency,
+        gScanList[sGridPassIdx].CodeType,
+        gScanList[sGridPassIdx].Code);
+
+    if (result == 0) return false; // still settling on this cell - stay put
+
+    if (result == 1) {
+        if (gScanList[sGridPassIdx].HitCount < 255) gScanList[sGridPassIdx].HitCount++;
+        gInterceptorActiveFrequency = gScanList[sGridPassIdx].Frequency;
+        gInterceptorLastActiveSlot = (int16_t)sGridPassIdx; // tick-mark moves, cursor doesn't
+        APP_StartListening(FUNCTION_RECEIVE);
+        gUpdateDisplay = true;
+        gInterceptorCheckingSlot = -1;
+        return true; // locked on - pass ends here, dwell takes over
+    }
+
+    // result == 2: nothing on this cell - advance to the next one.
+    sGridPassIdx++;
+    return false;
+}
+
 static void Do_FastGridScan_Cycle(void) {
     static bool use_A = true;
     static int16_t index_A = -2;
@@ -781,6 +861,12 @@ void INTERCEPTOR_Engine_Tick(void) {
         gInterceptorFlashCount = 0;
         gInterceptorCheckingSlot = -1;
         gInterceptorHuntTickerActive = false;
+        // Clear grid-pass scheduling too - a pass interrupted partway
+        // through shouldn't resume mid-walk when we come back.
+        sGridPassActive = false;
+        sGridPassDue    = false;
+        sGridPassIdx    = 0;
+        sGridCheckIntervalCounter = 0;
         return;
     }
 
@@ -799,27 +885,26 @@ void INTERCEPTOR_Engine_Tick(void) {
         return;
 
     if (gInterceptorBandSweepActive) {
-        // Sweep runs continuously; grid-check gets one full pass through
-        // all saved cells approximately once per second. This prevents
-        // the constant per-tick alternation that was causing sweep to
-        // slow down significantly whenever cells existed (every
-        // alternation costs a full retune to a different frequency).
-        static bool sweepOwnsTuner = true;
-        static uint16_t sweepTicksSinceGridCheck = 0;
-
-        if (sweepOwnsTuner) {
-            Do_BandSweep_Cycle();
-            if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0) {
-                sweepTicksSinceGridCheck++;
-                if (sweepTicksSinceGridCheck >= GRID_CHECK_INTERVAL_TICKS) {
-                    sweepOwnsTuner = false;
-                    sweepTicksSinceGridCheck = 0;
-                }
-            }
+        // Sweep runs continuously until the 10ms scheduler says a grid
+        // pass is owed (once per real second). Then one clean pass runs
+        // through every populated cell exactly once, and sweep resumes.
+        // All the timing lives in INTERCEPTOR_TimeSlice10ms - this
+        // function just does whichever work is currently called for,
+        // because it runs at a variable main-loop rate and can't measure
+        // real time on its own.
+        if (sGridPassActive) {
+            if (Do_GridCheck_Pass())
+                sGridPassActive = false; // pass finished - back to sweeping
+        } else if (sGridPassDue
+                   && sSweepCheckState.state == CANDCHECK_IDLE
+                   && gInterceptorActiveFrequency == 0) {
+            // Only start a pass at a clean boundary - never mid-settle on
+            // a sweep candidate, and never while dwelling on a signal.
+            sGridPassDue    = false;
+            sGridPassActive = true;
+            sGridPassIdx    = 0; // start of a fresh forward walk
         } else {
-            Do_GridCheck_Cycle();
-            if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
-                sweepOwnsTuner = true;
+            Do_BandSweep_Cycle();
         }
         return;
     }
