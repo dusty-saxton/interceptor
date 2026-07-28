@@ -31,6 +31,7 @@ bool     gInterceptorTxOverrideActive = false;
 // the status bar. Declared here so the 10ms tick can count it down.
 extern int16_t  gInterceptorSavedChannelNotify;
 extern uint16_t gInterceptorSaveNotifyCountdown;
+extern int8_t   gInterceptorSaveFlashSlot;
 
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
