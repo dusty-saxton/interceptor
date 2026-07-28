@@ -24,6 +24,7 @@ extern bool     gInterceptorBandSweepActive;
 extern bool     gInterceptorHuntTickerActive;
 extern uint32_t gInterceptorHuntTickerFreq;
 extern int8_t   gInterceptorFlashSlot;
+extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
 extern uint8_t  gInterceptorFlashCount;
 extern int16_t  gInterceptorLastActiveSlot; // -1 = nothing yet; passive tick-mark, never moves the cursor
 
@@ -387,6 +388,17 @@ void UI_DisplayInterceptorGridPage(void)
 
             if (gScanList[idx].Muted) {
                 Draw_Muted_X(page, x, xEnd);
+            }
+
+            if (idx == (uint16_t)gInterceptorCheckingSlot) {
+                // Full-cell invert while this saved cell is being checked -
+                // grid-check now only runs once per second (not every
+                // tick), so this is a brief, visible flash rather than the
+                // imperceptible blur it was before that throttle existed.
+                for (uint8_t col = x; col <= xEnd && col < LCD_WIDTH; col++) {
+                    if (page < FRAME_LINES)     gFrameBuffer[page][col]     ^= 0xFF;
+                    if (page + 1 < FRAME_LINES) gFrameBuffer[page + 1][col] ^= 0xFF;
+                }
             }
 
             if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 0
