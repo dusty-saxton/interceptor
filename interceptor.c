@@ -245,7 +245,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-#define REPLY_WAIT_10MS_TICKS  100 // ~1s grace before abandoning a dwell - a brief pause in speech or a momentary squelch flicker shouldn't instantly kick the engine back into scanning
+#define REPLY_WAIT_10MS_TICKS  300 // ~3s grace before abandoning a dwell - a brief pause in speech or a momentary squelch flicker shouldn't instantly kick the engine back into scanning
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
 #define MAX_DWELL_10MS_TICKS 2000
