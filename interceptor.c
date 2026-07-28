@@ -56,7 +56,7 @@ uint8_t  gInterceptorFlashCount = 0;
 int16_t  gInterceptorLastActiveSlot = -1; // passive tick-mark on last-heard cell, never moves the cursor
 int16_t  gInterceptorCheckingSlot = -1;
 
-#define CANDIDATE_SETTLE_10MS_TICKS  10
+#define CANDIDATE_SETTLE_10MS_TICKS  20 // doubled from 10 - the checking-slot flash was sporadic/imperceptible at the shorter window, this gives a screen redraw a reliable chance to actually catch it
 
 enum { CANDCHECK_IDLE, CANDCHECK_WAITING };
 
@@ -237,7 +237,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-#define REPLY_WAIT_10MS_TICKS  0
+#define REPLY_WAIT_10MS_TICKS  100 // ~1s grace before abandoning a dwell - a brief pause in speech or a momentary squelch flicker shouldn't instantly kick the engine back into scanning
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
 #define MAX_DWELL_10MS_TICKS 800
