@@ -248,7 +248,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  100 // ~1s grace before abandoning a dwell - a brief pause in speech or a momentary squelch flicker shouldn't instantly kick the engine back into scanning
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
-#define MAX_DWELL_10MS_TICKS 800
+//#define MAX_DWELL_10MS_TICKS 800
 #define NOISE_CHECK_10MS_TICKS 150
 #define NOISE_VARIANCE_THRESHOLD 20
 #define NOISE_LOUD_THRESHOLD 30
