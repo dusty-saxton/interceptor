@@ -245,10 +245,10 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-#define REPLY_WAIT_10MS_TICKS  300 // ~3s grace before abandoning a dwell - a brief pause in speech or a momentary squelch flicker shouldn't instantly kick the engine back into scanning
+#define REPLY_WAIT_10MS_TICKS  300 // ~3s grace before abandoning a dwell - field-tested value; the original ~1s wasn't long enough to bridge a real gap that was causing a saved cell to drop and reconnect roughly every 6 seconds
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
-#define MAX_DWELL_10MS_TICKS 2000
+#define MAX_DWELL_10MS_TICKS 2000 // ~20s - field-tested; combined with the longer grace period, fixed a saved cell dropping and reconnecting roughly every 6 seconds in real use
 #define NOISE_CHECK_10MS_TICKS 150
 #define NOISE_VARIANCE_THRESHOLD 20
 #define NOISE_LOUD_THRESHOLD 30
@@ -761,6 +761,74 @@ static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
 static void Do_BandSweep_Cycle(void) {
     static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1;
     static uint32_t sSweepFreq = 0;
+    static bool     sSweepCssActive = false;
+    static uint8_t  sSweepCssAttempts = 0;
+    static uint8_t  sSweepCssResultType = CODE_TYPE_OFF;
+    static uint8_t  sSweepCssResultCode = 0;
+
+    if (sSweepCssActive) {
+        uint32_t cdcssFreq;
+        uint16_t ctcssFreq;
+        BK4819_CssScanResult_t cssResult = BK4819_GetCxCSSScanResult(&cdcssFreq, &ctcssFreq);
+        uint8_t foundType = CODE_TYPE_OFF;
+        uint8_t foundCode = 0;
+        bool    resolved  = false;
+
+        if (cssResult == BK4819_CSS_RESULT_CDCSS) {
+            uint8_t code = DCS_GetCdcssCode(cdcssFreq);
+            if (code != 0xFF) {
+                foundType = CODE_TYPE_DIGITAL;
+                foundCode = code;
+                resolved  = true;
+            }
+        } else if (cssResult == BK4819_CSS_RESULT_CTCSS) {
+            uint8_t code = DCS_GetCtcssCode((int)ctcssFreq);
+            if (code != 0xFF) {
+                if (code == sSweepCssResultCode && sSweepCssResultType == CODE_TYPE_CONTINUOUS_TONE) {
+                    foundType = CODE_TYPE_CONTINUOUS_TONE;
+                    foundCode = code;
+                    resolved  = true;
+                } else {
+                    sSweepCssResultType = CODE_TYPE_CONTINUOUS_TONE;
+                    sSweepCssResultCode = code;
+                }
+            }
+        }
+
+        if (!resolved) {
+            sSweepCssAttempts++;
+            if (sSweepCssAttempts >= CSS_MAX_ATTEMPTS) {
+                resolved  = true; // gave up - save with no tone rather than none at all
+                foundType = CODE_TYPE_OFF;
+                foundCode = 0;
+            }
+        }
+
+        if (!resolved) {
+            BK4819_SetScanFrequency(sSweepFreq); // keep scanning
+            return;
+        }
+
+        // Must disable frequency-scan mode before returning to normal
+        // receive - without this the chip stays in scan mode at the
+        // hardware level and audio never actually plays even though
+        // detection succeeded (confirmed cause of a real bug earlier
+        // this session).
+        BK4819_DisableFrequencyScan();
+        sSweepCssActive = false;
+
+        INTERCEPTOR_LogNewCapture(sSweepFreq, foundType, foundCode);
+        gInterceptorActiveFrequency = sSweepFreq;
+        for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+            if (gScanList[i].Frequency == sSweepFreq) {
+                gInterceptorLastActiveSlot = (int16_t)i;
+                break;
+            }
+        }
+        APP_StartListening(FUNCTION_RECEIVE);
+        gUpdateDisplay = true;
+        return;
+    }
 
     if (gInterceptorActiveFrequency != 0) {
         gInterceptorHuntTickerActive = false;
@@ -806,16 +874,16 @@ static void Do_BandSweep_Cycle(void) {
 
         if (!blacklisted) {
             gInterceptorHuntTickerActive = false;
-            INTERCEPTOR_LogNewCapture(sSweepFreq, CODE_TYPE_OFF, 0);
-            gInterceptorActiveFrequency = sSweepFreq;
-            for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
-                if (gScanList[i].Frequency == sSweepFreq) {
-                    gInterceptorLastActiveSlot = (int16_t)i; // tick-mark, cursor stays put
-                    break;
-                }
-            }
-            APP_StartListening(FUNCTION_RECEIVE);
-            gUpdateDisplay = true;
+            // Don't save yet - scan for a CTCSS/DCS tone first, same
+            // mechanism hunt uses. Saving with CODE_TYPE_OFF unconditionally
+            // (the previous behavior) meant a real tone on the channel was
+            // never detected or saved, even though hunt could find it
+            // moments later on the exact same frequency.
+            BK4819_SetScanFrequency(sSweepFreq);
+            sSweepCssAttempts   = 0;
+            sSweepCssResultType = CODE_TYPE_OFF;
+            sSweepCssResultCode = 0;
+            sSweepCssActive     = true;
             return;
         }
     }

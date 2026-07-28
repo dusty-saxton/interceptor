@@ -7,6 +7,7 @@
 #include "misc.h"
 #include "radio.h"
 #include "settings.h"
+#include "driver/eeprom.h"
 #include "frequencies.h"
 #include "app/generic.h"
 #include "driver/bk4819.h"
@@ -39,6 +40,40 @@ static uint16_t CurrentSlotIndex(void) {
 static VFO_Info_t sInterceptorTxVfo;
 static VFO_Info_t *sSavedTxVfo = NULL;
 
+// Reads a real memory channel's full saved configuration directly by
+// index - no searching needed, since cells now store exactly which
+// channel they're linked to (HasSourceMemoryChannel/SourceMemoryChannel).
+// Reads the raw per-channel EEPROM layout (16 bytes: RX freq, TX offset,
+// RX code, TX code, code types, modulation+direction - confirmed against
+// SETTINGS_SaveChannel's own write order in settings.c) rather than
+// calling RADIO_ConfigureChannel, which operates on the live VFO A/B
+// state and would risk disrupting whatever the user has actively
+// selected on the normal VFO screen.
+static void Read_Memory_Channel_Info(uint8_t channel, uint32_t *rxFreqOut,
+    uint32_t *offsetOut, uint8_t *directionOut,
+    uint8_t *rxCodeTypeOut, uint8_t *rxCodeOut,
+    uint8_t *txCodeTypeOut, uint8_t *txCodeOut)
+{
+    struct {
+        uint32_t frequency;
+        uint32_t offset;
+        uint8_t  rxCode;
+        uint8_t  txCode;
+        uint8_t  codeTypes;       // (txType << 4) | rxType
+        uint8_t  modAndDirection; // (modulation << 4) | direction
+    } __attribute__((packed)) info;
+
+    EEPROM_ReadBuffer(channel * 16, &info, sizeof(info));
+
+    *rxFreqOut     = info.frequency;
+    *offsetOut     = info.offset;
+    *directionOut  = info.modAndDirection & 0x0F;
+    *rxCodeTypeOut = info.codeTypes & 0x0F;
+    *rxCodeOut     = info.rxCode;
+    *txCodeTypeOut = (info.codeTypes >> 4) & 0x0F;
+    *txCodeOut     = info.txCode;
+}
+
 static void Begin_Interceptor_PTT(void)
 {
     uint16_t idx = CurrentSlotIndex();
@@ -57,13 +92,37 @@ static void Begin_Interceptor_PTT(void)
     sInterceptorTxVfo.pRX = &sInterceptorTxVfo.freq_config_RX;
     sInterceptorTxVfo.pTX = &sInterceptorTxVfo.freq_config_TX;
 
+    sInterceptorTxVfo.freq_config_RX.Frequency = gScanList[idx].Frequency;
     sInterceptorTxVfo.freq_config_TX.Frequency = gScanList[idx].Frequency;
     sInterceptorTxVfo.freq_config_TX.CodeType  = gScanList[idx].CodeType;
     sInterceptorTxVfo.freq_config_TX.Code      = gScanList[idx].Code;
 
-    // grid channels are direct/simplex - no repeater offset
-    sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = 0;
-    sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
+    // If this cell is directly linked to a real memory channel (manually
+    // entered, or saved there via F+1), pull that channel's actual
+    // repeater offset/direction and its own saved TX tone - no searching
+    // needed, this is exactly the channel the user intended. Otherwise
+    // this is a bare discovery with no known repeater relationship, so
+    // transmit simplex using the grid cell's own detected tone.
+    if (gScanList[idx].HasSourceMemoryChannel) {
+        uint32_t chFreq, chOffset;
+        uint8_t  chDirection, chRxCodeType, chRxCode, chTxCodeType, chTxCode;
+        Read_Memory_Channel_Info(gScanList[idx].SourceMemoryChannel, &chFreq,
+            &chOffset, &chDirection, &chRxCodeType, &chRxCode, &chTxCodeType, &chTxCode);
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = chOffset;
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = chDirection;
+        sInterceptorTxVfo.freq_config_TX.CodeType        = chTxCodeType;
+        sInterceptorTxVfo.freq_config_TX.Code            = chTxCode;
+    } else {
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = 0;
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
+    }
+
+    // RADIO_ApplyOffset reads freq_config_RX.Frequency plus the
+    // offset/direction just set above to compute the real
+    // freq_config_TX.Frequency - without calling this, a matched
+    // channel's offset would be recorded but never actually applied,
+    // and we'd transmit on the RX frequency regardless.
+    RADIO_ApplyOffset(&sInterceptorTxVfo);
 
     // Force narrowband (12.5kHz) - confirmed via FCC.gov: since Jan 1 2013
     // this is a real legal requirement for Part 90 licensees in these exact
@@ -267,6 +326,8 @@ static void Save_Cell_To_Memory(uint16_t slotIdx)
     // holds exactly the frequency/name/tone just written to the channel,
     // so there's nothing to re-fetch - only the flag needs setting.
     gScanList[slotIdx].IsLocked = true;
+    gScanList[slotIdx].HasSourceMemoryChannel = true;
+    gScanList[slotIdx].SourceMemoryChannel    = (uint8_t)targetChannel;
 
     gInterceptorSavedChannelNotify = (int16_t)targetChannel;
     gInterceptorSaveNotifyCountdown = 300; // ~3 seconds, decremented in INTERCEPTOR_TimeSlice10ms
@@ -316,6 +377,20 @@ static void Confirm_Channel_Entry(void)
     gScanList[idx].Frequency = SETTINGS_FetchChannelFrequency((int)channel);
     SETTINGS_FetchChannelName(gScanList[idx].Name, (int)channel);
     gScanList[idx].IsLocked = true; // manually added: protected from auto-eviction/sort
+
+    // Pull the channel's real RX tone too, not just frequency/name - and
+    // link this cell directly to the channel it came from, so PTT can
+    // use the real repeater offset/TX tone later with no searching needed.
+    {
+        uint32_t chFreq, chOffset;
+        uint8_t  chDirection, chRxCodeType, chRxCode, chTxCodeType, chTxCode;
+        Read_Memory_Channel_Info((uint8_t)channel, &chFreq, &chOffset,
+            &chDirection, &chRxCodeType, &chRxCode, &chTxCodeType, &chTxCode);
+        gScanList[idx].CodeType = chRxCodeType;
+        gScanList[idx].Code     = chRxCode;
+    }
+    gScanList[idx].HasSourceMemoryChannel = true;
+    gScanList[idx].SourceMemoryChannel    = (uint8_t)channel;
 
     gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
     gUpdateDisplay = true;

@@ -19,6 +19,8 @@ typedef struct {
     uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
     uint8_t  NoiseFlagLevel; // average meter level from the last flagged pass, for cross-pass consistency comparison
     bool     Muted; // excluded from scan checking without being deleted - toggle with F+STAR
+    bool     HasSourceMemoryChannel; // true if this cell is directly linked to a real memory channel
+    uint8_t  SourceMemoryChannel;    // which channel (0-199) - only meaningful if HasSourceMemoryChannel
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];
