@@ -841,7 +841,8 @@ void INTERCEPTOR_Engine_Tick(void) {
                 huntTurnTicks = 0;
             }
         } else {
-            if (Do_GridCheck_Cycle())
+            Do_GridCheck_Cycle();
+            if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
                 huntOwnsTuner = true;
         }
     } else {
