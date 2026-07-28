@@ -261,6 +261,13 @@ static void Save_Cell_To_Memory(uint16_t slotIdx)
 
     SETTINGS_SaveChannel((uint8_t)targetChannel, 0, &tempVfo, 3); // Mode 3 also saves the name
 
+    // Now that this cell is backed by a real memory channel, mark it the
+    // same way a manually-added one is: draws the underline, and protects
+    // it from auto-eviction and popularity re-sorting. The cell already
+    // holds exactly the frequency/name/tone just written to the channel,
+    // so there's nothing to re-fetch - only the flag needs setting.
+    gScanList[slotIdx].IsLocked = true;
+
     gInterceptorSavedChannelNotify = (int16_t)targetChannel;
     gInterceptorSaveNotifyCountdown = 300; // ~3 seconds, decremented in INTERCEPTOR_TimeSlice10ms
     gInterceptorSaveFlashSlot = (int8_t)slotIdx; // flash the channel number in this cell as visual confirmation
