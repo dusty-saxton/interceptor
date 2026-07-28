@@ -16,6 +16,8 @@ extern char    gInterceptorNameBuf[7];
 extern bool    gInterceptorEnteringChannel;
 extern uint16_t gInterceptorPreviewChannel;
 extern int16_t  gInterceptorSavedChannelNotify;
+extern uint16_t gInterceptorSaveNotifyCountdown; // ticks remaining on the save confirmation
+extern int8_t   gInterceptorSaveFlashSlot;       // which cell to flash the saved channel number in
 extern bool     gInterceptorScrollPreviewActive;
 extern uint32_t gInterceptorActiveFrequency;
 extern uint8_t  gInterceptorMeterPercent;
@@ -321,6 +323,22 @@ void UI_DisplayInterceptorGridPage(void)
         }
 
         if (gScanList[idx].Frequency != 0) {
+            // Save confirmation - flash the memory channel number this
+            // cell was just saved to, right in the cell itself. Alternates
+            // roughly every 250ms across the ~3s window (about 6 flashes),
+            // so a successful save is unmistakable even if the status-bar
+            // text is missed.
+            if (idx == (uint16_t)gInterceptorSaveFlashSlot && gInterceptorSaveNotifyCountdown > 0
+                && ((gInterceptorSaveNotifyCountdown / 25) % 2) == 0) {
+                sprintf(box_out, "CH%03u", (unsigned int)(gInterceptorSavedChannelNotify + 1));
+                Safe_PrintStringSmallBold(box_out, x, xEnd, page + 1);
+                Shift_Text_Up(page + 1, x, xEnd, 2); // lift off the exact bottom edge
+                if (i == gInterceptorHighlight) {
+                    UI_DrawSelectionBox(page, x, xEnd);
+                }
+                continue;
+            }
+
             bool usedTightRenderer = false;
             if (idx == (uint16_t)gInterceptorFlashSlot && gInterceptorFlashCount > 3
                 && gScanList[idx].CodeType != CODE_TYPE_OFF) {
