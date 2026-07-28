@@ -17,6 +17,7 @@
 uint8_t gInterceptorHighlight = 0;      // index within the current page (0..14)
 int16_t gInterceptorSavedChannelNotify = -1; // -1 = no notification pending, else the channel just saved to
 uint16_t gInterceptorSaveNotifyCountdown = 0; // real 10ms ticks remaining to show it
+int8_t gInterceptorSaveFlashSlot = -1; // which grid cell was just saved - flashes the channel number in it as confirmation
 int8_t  gInterceptorNameEditIndex = -1; // -1 = not editing a name
 char    gInterceptorNameBuf[7] = {0};
 
@@ -262,6 +263,7 @@ static void Save_Cell_To_Memory(uint16_t slotIdx)
 
     gInterceptorSavedChannelNotify = (int16_t)targetChannel;
     gInterceptorSaveNotifyCountdown = 300; // ~3 seconds, decremented in INTERCEPTOR_TimeSlice10ms
+    gInterceptorSaveFlashSlot = (int8_t)slotIdx; // flash the channel number in this cell as visual confirmation
     gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
     gUpdateDisplay = true;
 }
@@ -358,6 +360,18 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 
     // F+5 toggles the wide VHF/UHF band sweep, same "handle it on our own
     // screen too" reasoning as F+7 above.
+    // F+1 saves the highlighted cell out to the first open real memory
+    // channel - frequency, name (if one was set) and CTCSS/DCS tone (if
+    // one was detected). Same clean-initial-press-only guard as the other
+    // F+key handlers, so a held F+1 can't fire it twice.
+    if (gWasFKeyPressed && Key == KEY_1 && gInterceptorNameEditIndex < 0 && !gInterceptorEnteringChannel) {
+        if (!bKeyPressed || bKeyHeld) return;
+        gWasFKeyPressed = false;
+        gUpdateStatus   = true;
+        Save_Cell_To_Memory(CurrentSlotIndex());
+        return;
+    }
+
     if (gWasFKeyPressed && Key == KEY_5) {
         // Only the clean initial press, not the long-press-detected event
         // that fires later on the same physical hold (without waiting for

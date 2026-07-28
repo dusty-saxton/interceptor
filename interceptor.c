@@ -4,6 +4,8 @@
 #include "driver/bk4819-regs.h"
 #include "driver/systick.h"
 #include "driver/system.h"
+#include "driver/gpio.h"
+#include "bsp/dp32g030/gpio.h"
 #include "audio.h"
 #include "functions.h"
 #include "dcs.h"
@@ -24,6 +26,11 @@ bool     gInterceptorViewActive = false;
 uint32_t gInterceptorActiveFrequency = 0;
 uint8_t  gInterceptorMeterPercent = 0;
 bool     gInterceptorTxOverrideActive = false;
+
+// Defined in app/interceptor.c - the save-to-memory confirmation shown on
+// the status bar. Declared here so the 10ms tick can count it down.
+extern int16_t  gInterceptorSavedChannelNotify;
+extern uint16_t gInterceptorSaveNotifyCountdown;
 
 static uint16_t sReplyWaitCountdown = 0;
 static bool     sWaitingForReply = false;
@@ -260,6 +267,38 @@ static uint16_t sTickerRedrawCountdown = 0;
 static uint16_t sDwellDurationCountdown = 0;
 
 void INTERCEPTOR_TimeSlice10ms(void) {
+    // Real-time PTT safety net. GPIO_CheckBit on the PTT pin returns TRUE
+    // when the button is RELEASED (confirmed against app/app.c's own
+    // handling, which comments the same polarity). End_Interceptor_PTT is
+    // normally called by the key-release event, but that dispatch doesn't
+    // always fire cleanly - and when it doesn't, gInterceptorTxOverrideActive
+    // stays stuck true forever, permanently locking the meter into
+    // mic/TX mode and showing it on whatever cell is selected. Debounced
+    // over 3 ticks (~30ms), matching the stock firmware's own PTT debounce,
+    // so a momentary glitch can't false-trigger it mid-transmission.
+    if (gInterceptorTxOverrideActive) {
+        static uint8_t sPttReleasedTicks = 0;
+        if (GPIO_CheckBit(&GPIOC->DATA, GPIOC_PIN_PTT)) {
+            if (++sPttReleasedTicks >= 3) {
+                sPttReleasedTicks = 0;
+                End_Interceptor_PTT();
+            }
+        } else {
+            sPttReleasedTicks = 0; // still genuinely held
+        }
+    }
+
+    // Countdown for the "SAVED CH###" status-bar confirmation - without
+    // this the notification would display once and then never clear.
+    if (gInterceptorSaveNotifyCountdown > 0) {
+        gInterceptorSaveNotifyCountdown--;
+        if (gInterceptorSaveNotifyCountdown == 0) {
+            gInterceptorSavedChannelNotify = -1;
+            gInterceptorSaveFlashSlot = -1;
+            gUpdateDisplay = true;
+        }
+    }
+
     if (sGridCheckState.state == CANDCHECK_WAITING && sGridCheckState.settleCountdown > 0)
         sGridCheckState.settleCountdown--;
     if (sSweepCheckState.state == CANDCHECK_WAITING && sSweepCheckState.settleCountdown > 0)
@@ -398,7 +437,7 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         }
     }
 
-    if (gInterceptorHuntTickerActive || gInterceptorFlashCount > 0) {
+    if (gInterceptorHuntTickerActive || gInterceptorFlashCount > 0 || gInterceptorSaveNotifyCountdown > 0) {
         if (sTickerRedrawCountdown > 0) {
             sTickerRedrawCountdown--;
         } else {
@@ -528,46 +567,75 @@ static void Do_Hunt_Cycle(void) {
     }
 }
 
-static void Do_GridCheck_Cycle(void) {
+// Returns true the moment a cell finishes being checked (result 1 or 2
+// reached) - NOT when a full lap completes. The caller counts these
+// completions directly against the real populated-cell count, which is
+// simpler and more robust than the previous approach of trying to detect
+// wraparound internally (that had a real bug: the search for the next
+// populated cell could pass through the lap's starting point without
+// ever landing exactly on it, so some cells got checked more than once
+// per lap before the wrap was ever detected).
+static bool Do_GridCheck_Cycle(void) {
     static uint16_t next_slot = 0;
     static uint16_t checking_idx = 0xFFFF;
 
     if (gInterceptorActiveFrequency != 0) {
         gInterceptorCheckingSlot = -1;
         Handle_Active_Channel_Dwell();
-        return;
+        return false;
     }
 
     if (checking_idx == 0xFFFF) {
+        uint16_t found = 0xFFFF;
         for (uint16_t tries = 0; tries < GRID_TOTAL_SLOTS; tries++) {
             uint16_t idx = next_slot;
             next_slot = (next_slot + 1) % GRID_TOTAL_SLOTS;
-            if (gScanList[idx].Frequency != 0) {
-                checking_idx = idx;
+            if (gScanList[idx].Frequency != 0 && !gScanList[idx].Muted) {
+                found = idx;
                 break;
             }
         }
-        if (checking_idx == 0xFFFF) { gInterceptorCheckingSlot = -1; return; }
+        if (found == 0xFFFF) {
+            gInterceptorCheckingSlot = -1;
+            return false; // grid is empty - nothing to report as "completed"
+        }
+        checking_idx = found;
     }
 
     gInterceptorCheckingSlot = (int16_t)checking_idx;
     gUpdateDisplay = true;
 
     uint8_t result = Check_Candidate_Frequency(&sGridCheckState, gScanList[checking_idx].Frequency, gScanList[checking_idx].CodeType, gScanList[checking_idx].Code);
-    if (result == 0) return;
+    if (result == 0) return false; // still settling on this cell
 
     if (result == 1) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
         // Cursor does NOT snap to the active cell - cursor stays where
-        // the user left it so the taskbar always shows their chosen cell's
-        // frequency, not whatever the scanner last heard.
+        // the user left it so the taskbar always shows their chosen
+        // cell's frequency, not whatever the scanner last heard.
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
+        gInterceptorCheckingSlot = -1;
+        checking_idx = 0xFFFF;
+        return true; // this cell's check just completed
     }
+
+    // result == 2: not active - this cell's check just completed too.
     gInterceptorCheckingSlot = -1;
     checking_idx = 0xFFFF;
+    return true;
+}
+
+// Counts how many cells are currently populated - used to know when a
+// full lap of grid-check has actually completed.
+static uint8_t Count_Populated_Cells(void) {
+    uint8_t count = 0;
+    for (uint16_t i = 0; i < GRID_TOTAL_SLOTS; i++) {
+        if (gScanList[i].Frequency != 0 && !gScanList[i].Muted) count++;
+    }
+    return count;
 }
 
 static void Do_FastGridScan_Cycle(void) {
@@ -653,6 +721,7 @@ static void Do_BandSweep_Cycle(void) {
     gInterceptorHuntTickerFreq   = sSweepFreq;
 
     if (sSweepCheckState.state == CANDCHECK_IDLE) {
+        BK4819_SetAF(BK4819_AF_MUTE); // the fast retune below doesn't touch the audio path on its own - mute explicitly so a genuinely active frequency briefly touched during the probe can't leak audio through before we decide whether to commit to it
         if (!Fast_Rssi_Precheck(sSweepFreq)) {
             sSweepFreq += gSweepBands[sSweepBandIndex].StepSize;
             Skip_Excluded_Ranges(&sSweepFreq, gSweepBands[sSweepBandIndex].StepSize);
@@ -737,13 +806,6 @@ void INTERCEPTOR_Engine_Tick(void) {
 
     if (gCurrentFunction == FUNCTION_TRANSMIT) return;
 
-    if (gCurrentFunction == FUNCTION_INCOMING
-        && sGridCheckState.state != CANDCHECK_WAITING
-        && sSweepCheckState.state != CANDCHECK_WAITING
-        && gInterceptorActiveFrequency == 0
-        && !gInterceptorTxOverrideActive)
-        return;
-
     if (gInterceptorBandSweepActive) {
         // Sweep runs continuously; grid-check gets one full pass through
         // all saved cells approximately once per second. This prevents
@@ -752,19 +814,32 @@ void INTERCEPTOR_Engine_Tick(void) {
         // alternation costs a full retune to a different frequency).
         static bool sweepOwnsTuner = true;
         static uint16_t sweepTicksSinceGridCheck = 0;
+        static uint16_t gridCheckTurnTicks = 0;
+        static uint8_t  gridCheckCellsDone = 0;
+        static uint8_t  gridCheckCellsTarget = 0;
+        #define GRID_CHECK_MAX_TURN_TICKS 300 // ~3s hard cap - grid-check must yield back by here regardless, so it can never permanently starve sweep
 
         if (sweepOwnsTuner) {
             Do_BandSweep_Cycle();
-            if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0) {
-                sweepTicksSinceGridCheck++;
-                if (sweepTicksSinceGridCheck >= GRID_CHECK_INTERVAL_TICKS) {
-                    sweepOwnsTuner = false;
-                    sweepTicksSinceGridCheck = 0;
-                }
+            // Counts every tick sweep holds the tuner, not just "fully
+            // idle" ones - candidates that pass the fast pre-check but
+            // fail the slower verification cost real settle time that
+            // was previously not counted at all, letting sweep's turn
+            // stretch far past the intended ~1s on a band with a lot of
+            // marginal RSSI readings.
+            sweepTicksSinceGridCheck++;
+            if (sSweepCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0
+                && sweepTicksSinceGridCheck >= GRID_CHECK_INTERVAL_TICKS) {
+                sweepOwnsTuner = false;
+                sweepTicksSinceGridCheck = 0;
+                gridCheckTurnTicks = 0;
+                gridCheckCellsDone = 0;
+                gridCheckCellsTarget = Count_Populated_Cells(); // exactly how many cells need checking to complete one full lap
             }
         } else {
-            Do_GridCheck_Cycle();
-            if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
+            gridCheckTurnTicks++;
+            if (Do_GridCheck_Cycle()) gridCheckCellsDone++;
+            if (gridCheckCellsDone >= gridCheckCellsTarget || gridCheckTurnTicks >= GRID_CHECK_MAX_TURN_TICKS)
                 sweepOwnsTuner = true;
         }
         return;
@@ -787,8 +862,7 @@ void INTERCEPTOR_Engine_Tick(void) {
                 huntTurnTicks = 0;
             }
         } else {
-            Do_GridCheck_Cycle();
-            if (sGridCheckState.state == CANDCHECK_IDLE && gInterceptorActiveFrequency == 0)
+            if (Do_GridCheck_Cycle())
                 huntOwnsTuner = true;
         }
     } else {
