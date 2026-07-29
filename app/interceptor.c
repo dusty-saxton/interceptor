@@ -323,7 +323,20 @@ static void Save_Cell_To_Memory(uint16_t slotIdx)
     if (gScanList[slotIdx].Name[0] != '\0')
         strncpy(tempVfo.Name, gScanList[slotIdx].Name, 6);
 
-    SETTINGS_SaveChannel((uint8_t)targetChannel, 0, &tempVfo, 3); // Mode 3 also saves the name
+    tempVfo.Band = FREQUENCY_GetBand(gScanList[slotIdx].Frequency);
+
+    SETTINGS_SaveChannel((uint8_t)targetChannel, 0, &tempVfo, 2);
+    // These two are called separately from SETTINGS_SaveChannel in every
+    // real save path in the stock firmware (app/menu.c, app/chFrScanner.c) -
+    // SETTINGS_SaveChannel alone never touches the name, and never marks
+    // the channel valid in gMR_ChannelAttributes (the RAM cache
+    // RADIO_CheckValidChannel reads). Without UpdateChannel, our own
+    // "find the next open slot" search above could keep re-finding this
+    // same channel index on every future save, silently overwriting it
+    // instead of ever advancing - the previous code never called this.
+    SETTINGS_UpdateChannel((uint8_t)targetChannel, &tempVfo, true);
+    if (gScanList[slotIdx].Name[0] != '\0')
+        SETTINGS_SaveChannelName((uint8_t)targetChannel, gScanList[slotIdx].Name);
 
     // Now that this cell is backed by a real memory channel, mark it the
     // same way a manually-added one is: draws the underline, and protects
