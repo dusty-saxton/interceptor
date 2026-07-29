@@ -525,8 +525,8 @@ static uint32_t sHuntFrequency = 0;
 static uint8_t  sHuntStableCount = 0;
 static uint8_t  sHuntCssAttempts = 0;
 #define HUNT_MAX_TURN_TICKS   150 // ~1.5s - enough for 3 stable 0.2s counter reads
-#define HUNT_CSS_POLL_10MS      2 // poll the tone scan ~every 20ms, matching the stock scanner's own pacing
-#define HUNT_CSS_MAX_POLLS    100 // ~2s of real time - CTCSS detection typically resolves in 200-600ms
+#define HUNT_CSS_POLL_10MS     21 // 210ms between tone-scan reads - matches the stock scanner's scan_delay_10ms exactly. Reading faster than this returns unsettled, inconsistent values, which made tone confirmation unreliable.
+#define HUNT_CSS_MAX_POLLS     14 // ~3s total (14 x 210ms) - plenty of settled readings to confirm a tone
 static uint8_t  sHuntCssResultType = CODE_TYPE_OFF;
 static uint8_t  sHuntCssResultCode = 0;
 
@@ -645,6 +645,10 @@ static void Do_Hunt_Cycle(void) {
             return;
         }
 
+        // Clean reset cycle before the next reading, exactly as stock does:
+        // disable, then SetScanFrequency (which re-enables via RX_TurnOn).
+        // Skipping the disable left stale detector state behind.
+        BK4819_Disable();
         BK4819_SetScanFrequency(sHuntFrequency);
         return;
     }
