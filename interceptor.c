@@ -519,6 +519,14 @@ static void Hunt_Reset(void) {
 
 static void Do_Hunt_Cycle(void) {
     if (sHuntState == HUNT_IDLE) {
+        // Give the receiver the same fresh, known-good setup the stock
+        // scanner (SCANNER_Start) uses before frequency scanning. Without
+        // this, EnableFrequencyScan runs against whatever state the chip
+        // was left in by normal receive / dual-watch handling / a prior
+        // PTT VFO redirect - and the frequency counter has no properly
+        // configured front-end to measure against, so it never locks.
+        RADIO_SelectVfos();
+        RADIO_SetupRegisters(true);
         BK4819_PickRXFilterPathBasedOnFrequency(gRxVfo->pRX->Frequency);
         BK4819_EnableFrequencyScan();
         sHuntState = HUNT_FREQ;
