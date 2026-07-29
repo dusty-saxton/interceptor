@@ -18,9 +18,6 @@ typedef struct {
     uint8_t  HitCount;    // times detected active while sniffing, used for sorting
     uint8_t  NoiseFlagCount; // consecutive dwells flagged as steady+loud (likely noise) - reset on any normal-variance dwell
     uint8_t  NoiseFlagLevel; // average meter level from the last flagged pass, for cross-pass consistency comparison
-    bool     Muted; // excluded from scan checking without being deleted - toggle with F+STAR
-    bool     HasSourceMemoryChannel; // true if this cell is directly linked to a real memory channel
-    uint8_t  SourceMemoryChannel;    // which channel (0-199) - only meaningful if HasSourceMemoryChannel
 } InterceptorChannel_t;
 
 extern InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS];
@@ -48,7 +45,6 @@ extern uint8_t  gInterceptorFlashCount;  // remaining flash toggles
 // Currently-being-checked cell, for grid-check and fast-scan - inverts
 // briefly while a specific saved cell is actively being tested.
 extern int16_t  gInterceptorCheckingSlot; // -1 = nothing currently being checked
-extern int16_t  gInterceptorLastActiveSlot; // -1 = none yet - purely visual, never moves the cursor
 
 // --- Band selection for F+5 sweep ---
 // Presets grounded in real US allocations, kept within the BK4819's actual
@@ -62,7 +58,10 @@ extern int16_t  gInterceptorLastActiveSlot; // -1 = none yet - purely visual, ne
 typedef struct {
     uint32_t StartFreq; // 10Hz units, same convention as everything else here
     uint32_t EndFreq;
-    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band
+    uint32_t StepSize;  // 10Hz units - real channel spacing varies by band, a single
+                        // fixed step was systematically missing channels that don't
+                        // happen to land on it (confirmed: 146.720 MHz, 5kHz-aligned,
+                        // was never reachable on a 12.5kHz grid starting elsewhere)
     char     Name[12];
     bool     Enabled;   // currently checked for sweeping
 } SweepBand_t;
