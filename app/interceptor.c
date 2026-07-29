@@ -7,6 +7,7 @@
 #include "misc.h"
 #include "radio.h"
 #include "settings.h"
+#include "driver/eeprom.h"
 #include "frequencies.h"
 #include "app/generic.h"
 #include "driver/bk4819.h"
@@ -15,6 +16,9 @@
 
 // Shared with ui/interceptor.c for drawing the current highlight/edit state
 uint8_t gInterceptorHighlight = 0;      // index within the current page (0..14)
+int16_t gInterceptorSavedChannelNotify = -1; // -1 = no notification pending, else the channel just saved to
+uint16_t gInterceptorSaveNotifyCountdown = 0; // real 10ms ticks remaining to show it
+int8_t gInterceptorSaveFlashSlot = -1; // which grid cell was just saved - flashes the channel number in it as confirmation
 int8_t  gInterceptorNameEditIndex = -1; // -1 = not editing a name
 char    gInterceptorNameBuf[7] = {0};
 
@@ -35,6 +39,41 @@ static uint16_t CurrentSlotIndex(void) {
 // mechanism this firmware already uses to restore VFOs elsewhere.
 static VFO_Info_t sInterceptorTxVfo;
 static VFO_Info_t *sSavedTxVfo = NULL;
+static VFO_Info_t *sSavedRxVfo = NULL;
+
+// Reads a real memory channel's full saved configuration directly by
+// index - no searching needed, since cells now store exactly which
+// channel they're linked to (HasSourceMemoryChannel/SourceMemoryChannel).
+// Reads the raw per-channel EEPROM layout (16 bytes: RX freq, TX offset,
+// RX code, TX code, code types, modulation+direction - confirmed against
+// SETTINGS_SaveChannel's own write order in settings.c) rather than
+// calling RADIO_ConfigureChannel, which operates on the live VFO A/B
+// state and would risk disrupting whatever the user has actively
+// selected on the normal VFO screen.
+static void Read_Memory_Channel_Info(uint8_t channel, uint32_t *rxFreqOut,
+    uint32_t *offsetOut, uint8_t *directionOut,
+    uint8_t *rxCodeTypeOut, uint8_t *rxCodeOut,
+    uint8_t *txCodeTypeOut, uint8_t *txCodeOut)
+{
+    struct {
+        uint32_t frequency;
+        uint32_t offset;
+        uint8_t  rxCode;
+        uint8_t  txCode;
+        uint8_t  codeTypes;       // (txType << 4) | rxType
+        uint8_t  modAndDirection; // (modulation << 4) | direction
+    } __attribute__((packed)) info;
+
+    EEPROM_ReadBuffer(channel * 16, &info, sizeof(info));
+
+    *rxFreqOut     = info.frequency;
+    *offsetOut     = info.offset;
+    *directionOut  = info.modAndDirection & 0x0F;
+    *rxCodeTypeOut = info.codeTypes & 0x0F;
+    *rxCodeOut     = info.rxCode;
+    *txCodeTypeOut = (info.codeTypes >> 4) & 0x0F;
+    *txCodeOut     = info.txCode;
+}
 
 static void Begin_Interceptor_PTT(void)
 {
@@ -54,13 +93,37 @@ static void Begin_Interceptor_PTT(void)
     sInterceptorTxVfo.pRX = &sInterceptorTxVfo.freq_config_RX;
     sInterceptorTxVfo.pTX = &sInterceptorTxVfo.freq_config_TX;
 
+    sInterceptorTxVfo.freq_config_RX.Frequency = gScanList[idx].Frequency;
     sInterceptorTxVfo.freq_config_TX.Frequency = gScanList[idx].Frequency;
     sInterceptorTxVfo.freq_config_TX.CodeType  = gScanList[idx].CodeType;
     sInterceptorTxVfo.freq_config_TX.Code      = gScanList[idx].Code;
 
-    // grid channels are direct/simplex - no repeater offset
-    sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = 0;
-    sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
+    // If this cell is directly linked to a real memory channel (manually
+    // entered, or saved there via F+1), pull that channel's actual
+    // repeater offset/direction and its own saved TX tone - no searching
+    // needed, this is exactly the channel the user intended. Otherwise
+    // this is a bare discovery with no known repeater relationship, so
+    // transmit simplex using the grid cell's own detected tone.
+    if (gScanList[idx].HasSourceMemoryChannel) {
+        uint32_t chFreq, chOffset;
+        uint8_t  chDirection, chRxCodeType, chRxCode, chTxCodeType, chTxCode;
+        Read_Memory_Channel_Info(gScanList[idx].SourceMemoryChannel, &chFreq,
+            &chOffset, &chDirection, &chRxCodeType, &chRxCode, &chTxCodeType, &chTxCode);
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = chOffset;
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = chDirection;
+        sInterceptorTxVfo.freq_config_TX.CodeType        = chTxCodeType;
+        sInterceptorTxVfo.freq_config_TX.Code            = chTxCode;
+    } else {
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY           = 0;
+        sInterceptorTxVfo.TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
+    }
+
+    // RADIO_ApplyOffset reads freq_config_RX.Frequency plus the
+    // offset/direction just set above to compute the real
+    // freq_config_TX.Frequency - without calling this, a matched
+    // channel's offset would be recorded but never actually applied,
+    // and we'd transmit on the RX frequency regardless.
+    RADIO_ApplyOffset(&sInterceptorTxVfo);
 
     // Force narrowband (12.5kHz) - confirmed via FCC.gov: since Jan 1 2013
     // this is a real legal requirement for Part 90 licensees in these exact
@@ -78,24 +141,32 @@ static void Begin_Interceptor_PTT(void)
     RADIO_ConfigureSquelchAndOutputPower(&sInterceptorTxVfo);
 
     sSavedTxVfo = gTxVfo;
+    sSavedRxVfo = gRxVfo;
     gTxVfo = &sInterceptorTxVfo;
+    gRxVfo = &sInterceptorTxVfo;
 
     GENERIC_Key_PTT(true); // reuse the real, existing PTT-press/TX-safety path
 }
 
-static void End_Interceptor_PTT(void)
+// Not static - INTERCEPTOR_Engine_Tick (interceptor.c) calls this directly
+// as a safety net, comparing gInterceptorTxOverrideActive against the PTT
+// pin's actual real-time state rather than trusting key-event dispatch
+// alone to always fire the release cleanly.
+void End_Interceptor_PTT(void)
 {
     gInterceptorTxOverrideActive = false;
     GENERIC_Key_PTT(false); // reuse the real, existing PTT-release/end-of-TX path
 
     if (sSavedTxVfo != NULL) {
-        // Don't just restore the saved pointer directly - force the same
+        // Don't just restore the saved pointers directly - force the same
         // full reconfigure this firmware already uses elsewhere (see
-        // gFlagReconfigureVfos in app/app.c), so gTxVfo/gRxVfo and all
-        // hardware registers get properly re-derived from the real,
-        // persistent VFO settings rather than trusted to still be correct.
+        // gFlagReconfigureVfos in app/app.c). That triggers RADIO_SelectVfos(),
+        // which correctly re-derives BOTH gTxVfo and gRxVfo from the real,
+        // persistent VFO settings - confirmed directly in radio.c - so both
+        // overrides get properly undone, not just one.
         gFlagReconfigureVfos = true;
         sSavedTxVfo = NULL;
+        sSavedRxVfo = NULL;
     }
 }
 
@@ -217,6 +288,72 @@ static void Begin_Channel_Entry(void)
     gUpdateDisplay = true;
 }
 
+// Saves a grid cell out to the first available (unused) real memory
+// channel - auto-selects the slot, no manual number entry needed. Uses
+// the cell's given name if it has one, or leaves the channel unnamed
+// (shows frequency only, same as any other unnamed memory channel) if
+// it doesn't. Built on this firmware's own real channel-save mechanism,
+// not a custom EEPROM write of our own.
+static void Save_Cell_To_Memory(uint16_t slotIdx)
+{
+    if (gScanList[slotIdx].Frequency == 0) return; // nothing to save
+
+    uint16_t targetChannel = 0xFFFF;
+    for (uint16_t i = 0; i < 200; i++) {
+        if (!RADIO_CheckValidChannel(i, false, 0)) { targetChannel = i; break; }
+    }
+    if (targetChannel == 0xFFFF) {
+        gBeepToPlay = BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL; // no free channel slots at all
+        return;
+    }
+
+    // Start from a real VFO as a template for all the fields we don't
+    // track ourselves (modulation, squelch thresholds, DTMF settings,
+    // etc.), then override just what our grid cell actually knows about.
+    VFO_Info_t tempVfo = *gRxVfo;
+    tempVfo.freq_config_RX.Frequency = gScanList[slotIdx].Frequency;
+    tempVfo.freq_config_TX.Frequency = gScanList[slotIdx].Frequency;
+    tempVfo.freq_config_RX.CodeType  = gScanList[slotIdx].CodeType;
+    tempVfo.freq_config_RX.Code      = gScanList[slotIdx].Code;
+    tempVfo.freq_config_TX.CodeType  = gScanList[slotIdx].CodeType;
+    tempVfo.freq_config_TX.Code      = gScanList[slotIdx].Code;
+    tempVfo.CHANNEL_BANDWIDTH = BK4819_FILTER_BW_NARROW;
+    tempVfo.TX_OFFSET_FREQUENCY = 0;
+    memset(tempVfo.Name, 0, sizeof(tempVfo.Name));
+    if (gScanList[slotIdx].Name[0] != '\0')
+        strncpy(tempVfo.Name, gScanList[slotIdx].Name, 6);
+
+    tempVfo.Band = FREQUENCY_GetBand(gScanList[slotIdx].Frequency);
+
+    SETTINGS_SaveChannel((uint8_t)targetChannel, 0, &tempVfo, 2);
+    // These two are called separately from SETTINGS_SaveChannel in every
+    // real save path in the stock firmware (app/menu.c, app/chFrScanner.c) -
+    // SETTINGS_SaveChannel alone never touches the name, and never marks
+    // the channel valid in gMR_ChannelAttributes (the RAM cache
+    // RADIO_CheckValidChannel reads). Without UpdateChannel, our own
+    // "find the next open slot" search above could keep re-finding this
+    // same channel index on every future save, silently overwriting it
+    // instead of ever advancing - the previous code never called this.
+    SETTINGS_UpdateChannel((uint8_t)targetChannel, &tempVfo, true);
+    if (gScanList[slotIdx].Name[0] != '\0')
+        SETTINGS_SaveChannelName((uint8_t)targetChannel, gScanList[slotIdx].Name);
+
+    // Now that this cell is backed by a real memory channel, mark it the
+    // same way a manually-added one is: draws the underline, and protects
+    // it from auto-eviction and popularity re-sorting. The cell already
+    // holds exactly the frequency/name/tone just written to the channel,
+    // so there's nothing to re-fetch - only the flag needs setting.
+    gScanList[slotIdx].IsLocked = true;
+    gScanList[slotIdx].HasSourceMemoryChannel = true;
+    gScanList[slotIdx].SourceMemoryChannel    = (uint8_t)targetChannel;
+
+    gInterceptorSavedChannelNotify = (int16_t)targetChannel;
+    gInterceptorSaveNotifyCountdown = 300; // ~3 seconds, decremented in INTERCEPTOR_TimeSlice10ms
+    gInterceptorSaveFlashSlot = (int8_t)slotIdx; // flash the channel number in this cell as visual confirmation
+    gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+    gUpdateDisplay = true;
+}
+
 // Reads the 3 typed digits as a 1-based channel number (001-200, matching
 // how this firmware's own MR channel entry works), validates it, and if
 // valid, pulls that channel's frequency and saved name straight from
@@ -259,6 +396,20 @@ static void Confirm_Channel_Entry(void)
     SETTINGS_FetchChannelName(gScanList[idx].Name, (int)channel);
     gScanList[idx].IsLocked = true; // manually added: protected from auto-eviction/sort
 
+    // Pull the channel's real RX tone too, not just frequency/name - and
+    // link this cell directly to the channel it came from, so PTT can
+    // use the real repeater offset/TX tone later with no searching needed.
+    {
+        uint32_t chFreq, chOffset;
+        uint8_t  chDirection, chRxCodeType, chRxCode, chTxCodeType, chTxCode;
+        Read_Memory_Channel_Info((uint8_t)channel, &chFreq, &chOffset,
+            &chDirection, &chRxCodeType, &chRxCode, &chTxCodeType, &chTxCode);
+        gScanList[idx].CodeType = chRxCodeType;
+        gScanList[idx].Code     = chRxCode;
+    }
+    gScanList[idx].HasSourceMemoryChannel = true;
+    gScanList[idx].SourceMemoryChannel    = (uint8_t)channel;
+
     gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
     gUpdateDisplay = true;
 }
@@ -280,26 +431,56 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // from app/main.c's - pressing F+7 while already viewing the grid would
     // otherwise never reach that logic at all.
     if (gWasFKeyPressed && Key == KEY_7) {
-        if (!bKeyPressed) return; // act on press, not release
-        gWasFKeyPressed = false;
-        gUpdateStatus   = true;
-
-        gInterceptorBandSweepActive = false; // mutually exclusive with band sweep
-
-        if (!bKeyHeld) {
-            gSniffingEnabled = !gSniffingEnabled;
-        } else {
-            gSniffingEnabled = false;
+        // Mutually exclusive: long-press-detected fires once while still
+        // held; short-press only resolves on release, and only if the
+        // long-press event never fired for this same hold. Treating both
+        // as independent events (as this used to) meant a held F+7 could
+        // toggle sniffing on and then immediately force it back off from
+        // one single button hold.
+        if (bKeyHeld) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            Sweep_Css_Reset(); // in case sweep was mid-tone-scan
+            gSniffingEnabled = false; // long press: force off
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            gUpdateDisplay = true;
+            return;
         }
-        gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
-        gUpdateDisplay = true;
-        return;
+        if (!bKeyPressed) {
+            gWasFKeyPressed = false;
+            gUpdateStatus   = true;
+            gInterceptorBandSweepActive = false;
+            Sweep_Css_Reset(); // in case sweep was mid-tone-scan
+            gSniffingEnabled = !gSniffingEnabled; // genuine short press: toggle
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            gUpdateDisplay = true;
+            return;
+        }
+        return; // initial press - wait to see if this becomes short or long
     }
 
     // F+5 toggles the wide VHF/UHF band sweep, same "handle it on our own
     // screen too" reasoning as F+7 above.
+    // F+1 saves the highlighted cell out to the first open real memory
+    // channel - frequency, name (if one was set) and CTCSS/DCS tone (if
+    // one was detected). Same clean-initial-press-only guard as the other
+    // F+key handlers, so a held F+1 can't fire it twice.
+    if (gWasFKeyPressed && Key == KEY_1 && gInterceptorNameEditIndex < 0 && !gInterceptorEnteringChannel) {
+        if (!bKeyPressed || bKeyHeld) return;
+        gWasFKeyPressed = false;
+        gUpdateStatus   = true;
+        Save_Cell_To_Memory(CurrentSlotIndex());
+        return;
+    }
+
     if (gWasFKeyPressed && Key == KEY_5) {
-        if (!bKeyPressed) return; // act on press, not release
+        // Only the clean initial press, not the long-press-detected event
+        // that fires later on the same physical hold (without waiting for
+        // release) - reacting to both meant a held F+5 could trigger this
+        // twice, with the second firing landing on whatever screen the
+        // first one had already switched to.
+        if (!bKeyPressed || bKeyHeld) return;
         gWasFKeyPressed = false;
         gUpdateStatus   = true;
 
@@ -308,6 +489,22 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
         gRequestDisplayScreen = DISPLAY_BAND_SELECT;
         gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
         gUpdateDisplay = true;
+        return;
+    }
+
+    // F+STAR mutes/unmutes the highlighted cell - takes it out of scan
+    // checking without deleting it, shown crossed-out on the grid.
+    if (gWasFKeyPressed && Key == KEY_STAR) {
+        if (!bKeyPressed || bKeyHeld) return;
+        gWasFKeyPressed = false;
+        gUpdateStatus   = true;
+
+        uint16_t idx = CurrentSlotIndex();
+        if (gScanList[idx].Frequency != 0) {
+            gScanList[idx].Muted = !gScanList[idx].Muted;
+            gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
+            gUpdateDisplay = true;
+        }
         return;
     }
 
@@ -379,6 +576,24 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
     // with no way to hold-and-scroll.
     if (gInterceptorNameEditIndex >= 0 && (Key == KEY_UP || Key == KEY_DOWN) && bKeyPressed) {
         Cycle_Name_Character(Key == KEY_UP ? 1 : -1);
+        return;
+    }
+
+    // Long-press MENU on a filled cell saves it out to a real memory
+    // channel - short-press MENU (renaming) is unaffected, handled by the
+    // normal switch below since bKeyHeld is never true for it. Fires the
+    // moment the long-press is detected, while still held, so the status
+    // bar confirmation is visible before you let go - not on release.
+    if (Key == KEY_MENU && bKeyHeld && gInterceptorNameEditIndex < 0 && !gInterceptorEnteringChannel) {
+        static bool sAlreadySavedThisHold = false;
+        if (bKeyPressed) {
+            if (!sAlreadySavedThisHold) {
+                Save_Cell_To_Memory(CurrentSlotIndex());
+                sAlreadySavedThisHold = true;
+            }
+        } else {
+            sAlreadySavedThisHold = false; // released - ready for next time
+        }
         return;
     }
 
