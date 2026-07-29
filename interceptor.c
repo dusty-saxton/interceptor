@@ -955,7 +955,17 @@ void INTERCEPTOR_Engine_Tick(void) {
     // mid-detection. FUNCTION_INCOMING is also our OWN success signal
     // while mid-check, so this only applies when we're not currently
     // waiting on a candidate check or already dwelling on a confirmed hit.
-    if (gCurrentFunction == FUNCTION_INCOMING
+    //
+    // Hunt mode is deliberately exempt: its entire purpose is to act
+    // precisely when the radio is genuinely receiving something external
+    // (that's how it measures a nearby transmission's exact frequency) -
+    // this guard was designed only with sweep/grid-check in mind and
+    // never accounted for hunt, so without this exemption it silently
+    // skipped the whole tick (including the actual hunt cycle call) the
+    // moment a real signal came in, which is precisely when hunt needs
+    // to run.
+    if (!gSniffingEnabled
+        && gCurrentFunction == FUNCTION_INCOMING
         && sGridCheckState.state != CANDCHECK_WAITING
         && sSweepCheckState.state != CANDCHECK_WAITING
         && gInterceptorActiveFrequency == 0
