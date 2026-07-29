@@ -847,6 +847,8 @@ void APP_Update(void)
 	if (gCurrentFunction != FUNCTION_TRANSMIT)
 		HandleFunction();
 
+	INTERCEPTOR_Engine_Tick(); // runs the hunt/sweep/grid-check engine - must run every main-loop iteration
+
 #ifdef ENABLE_FMRADIO
 //	if (gFmRadioCountdown_500ms > 0)
 	if (gFmRadioMode && gFmRadioCountdown_500ms > 0)    // 1of11
