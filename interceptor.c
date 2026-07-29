@@ -39,11 +39,11 @@ bool     gInterceptorBandSweepActive = false;
 
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  1000, "Ham 6m",      false },
-    { 14400000, 14800000, 1000, "Ham 2m",      false },
-    { 22200000, 22500000, 2500, "Ham 1.25m",   false },
-    { 42000000, 45000000, 1000, "Ham 70cm",    false },
-    { 15080000, 17400000, 750,  "VHF LandMob", false },
-    { 38000000, 40000000, 1250, "UHF Fed",     false },
+    { 14400000, 14800000, 2500, "Ham 2m",      false },
+    { 21900000, 22500000, 2500, "Ham 1.25m",   false },
+    { 42000000, 45000000, 2500, "Ham 70cm",    false },
+    { 15000000, 17400000, 750,  "VHF LandMob", false },
+    { 40000000, 42000000, 1250, "UHF Fed",     false },
     { 45000000, 47000000, 1250, "UHF LandMob", false },
     { 80600000, 82400000, 1250, "800 PS",      false },
     { 0,        0,        1250, "Manual",      false },
@@ -588,6 +588,14 @@ static void Do_Hunt_Cycle(void) {
         // budget is spent in microseconds at main-loop rate.
         if (sHuntCssPollDelay > 0) return;
         sHuntCssPollDelay = HUNT_CSS_POLL_10MS;
+
+        // Hold off hunt's turn timeout while the tone scan is actually
+        // running. That timeout exists to stop hunt monopolizing the tuner
+        // during frequency counting - but once a frequency is locked and
+        // we're measuring its tone, interrupting means losing the capture
+        // completely. Without this, the 1.5s turn timeout beat the 2s
+        // tone-scan budget and Hunt_Reset threw the result away every time.
+        sHuntTurnTicks = 0;
 
         uint32_t cdcssFreq;
         uint16_t ctcssFreq;
