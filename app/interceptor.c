@@ -428,6 +428,7 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
             gWasFKeyPressed = false;
             gUpdateStatus   = true;
             gInterceptorBandSweepActive = false;
+            Sweep_Css_Reset(); // in case sweep was mid-tone-scan
             gSniffingEnabled = false; // long press: force off
             gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
             gUpdateDisplay = true;
@@ -437,6 +438,7 @@ void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
             gWasFKeyPressed = false;
             gUpdateStatus   = true;
             gInterceptorBandSweepActive = false;
+            Sweep_Css_Reset(); // in case sweep was mid-tone-scan
             gSniffingEnabled = !gSniffingEnabled; // genuine short press: toggle
             gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
             gUpdateDisplay = true;

@@ -39,6 +39,14 @@ uint8_t INTERCEPTOR_GetReachablePageCount(void);
 void UI_DisplayInterceptorGridPage(void);
 void INTERCEPTOR_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
 void End_Interceptor_PTT(void);
+// Cleans up sweep's tone-scan state and disables the hardware's
+// frequency-scan mode - must be called anywhere sweep can be abandoned
+// mid-tone-scan (leaving the grid screen, or switching to hunt/grid-only
+// mode via F+7), otherwise the chip stays stuck in frequency-scan mode -
+// which breaks not just our own hunt/sweep but also the stock, built-in
+// frequency-counter feature (F+4 from the main screen), since they share
+// the same hardware register.
+void Sweep_Css_Reset(void);
 void UI_DisplayBandSelect(void);
 void BAND_SELECT_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
 

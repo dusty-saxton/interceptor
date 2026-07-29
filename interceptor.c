@@ -758,13 +758,32 @@ static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
     }
 }
 
+static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1;
+static uint32_t sSweepFreq = 0;
+static bool     sSweepCssActive = false;
+static uint8_t  sSweepCssAttempts = 0;
+static uint8_t  sSweepCssResultType = CODE_TYPE_OFF;
+static uint8_t  sSweepCssResultCode = 0;
+
+// Cleans up sweep's tone-scan state and unconditionally disables
+// frequency-scan mode - safe to call even if not currently scanning
+// (just writes one register). Needed because sSweepCssActive can be left
+// true if the grid screen is exited (or sweep otherwise stops) mid-scan -
+// Do_BandSweep_Cycle would never run again to naturally call
+// BK4819_DisableFrequencyScan() itself, leaving the chip stuck in
+// frequency-scan mode indefinitely. That stuck state doesn't just break
+// our own hunt/sweep - it also breaks the stock, built-in frequency-
+// counter feature (F+4 from the main screen), since they all share the
+// same underlying hardware register.
+void Sweep_Css_Reset(void) {
+    BK4819_DisableFrequencyScan();
+    sSweepCssActive     = false;
+    sSweepCssAttempts   = 0;
+    sSweepCssResultType = CODE_TYPE_OFF;
+    sSweepCssResultCode = 0;
+}
+
 static void Do_BandSweep_Cycle(void) {
-    static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1;
-    static uint32_t sSweepFreq = 0;
-    static bool     sSweepCssActive = false;
-    static uint8_t  sSweepCssAttempts = 0;
-    static uint8_t  sSweepCssResultType = CODE_TYPE_OFF;
-    static uint8_t  sSweepCssResultCode = 0;
 
     if (sSweepCssActive) {
         uint32_t cdcssFreq;
@@ -934,6 +953,7 @@ void INTERCEPTOR_Engine_Tick(void) {
 
     if (gScreenToDisplay != DISPLAY_INTERCEPTOR) {
         Hunt_Reset();
+        Sweep_Css_Reset();
         gInterceptorActiveFrequency = 0;
         gInterceptorFlashSlot = -1;
         gInterceptorFlashCount = 0;

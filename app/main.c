@@ -214,6 +214,7 @@ static void processFKeyFunction(const KEY_Code_t Key, const bool beep)
 			gUpdateStatus   = true;
 
 			gInterceptorBandSweepActive = false; // mutually exclusive with band sweep
+			Sweep_Css_Reset(); // in case sweep was mid-tone-scan - otherwise the chip stays stuck in frequency-scan mode
 
 			if (beep) {
 				// short press: toggle sniffing on/off
