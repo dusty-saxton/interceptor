@@ -525,8 +525,8 @@ static uint32_t sHuntFrequency = 0;
 static uint8_t  sHuntStableCount = 0;
 static uint8_t  sHuntCssAttempts = 0;
 #define HUNT_MAX_TURN_TICKS   150 // ~1.5s - enough for 3 stable 0.2s counter reads
-#define HUNT_CSS_POLL_10MS     21 // 210ms between tone-scan reads - matches the stock scanner's scan_delay_10ms exactly. Reading faster than this returns unsettled, inconsistent values, which made tone confirmation unreliable.
-#define HUNT_CSS_MAX_POLLS     14 // ~3s total (14 x 210ms) - plenty of settled readings to confirm a tone
+#define HUNT_CSS_POLL_10MS      2 // 20ms - poll often so a settled result is caught the moment it appears. Safe because we never re-arm on NOT_FOUND, so the detector integrates undisturbed between polls.
+#define HUNT_CSS_MAX_POLLS    100 // ~2s of real time at 20ms per poll
 static uint8_t  sHuntCssResultType = CODE_TYPE_OFF;
 static uint8_t  sHuntCssResultCode = 0;
 
@@ -626,13 +626,15 @@ static void Do_Hunt_Cycle(void) {
         } else if (result == BK4819_CSS_RESULT_CTCSS) {
             uint8_t code = DCS_GetCtcssCode((int)ctcssFreq);
             if (code != 0xFF) {
-                if (code == sHuntCssResultCode && sHuntCssResultType == CODE_TYPE_CONTINUOUS_TONE) {
-                    INTERCEPTOR_LogNewCapture(sHuntFrequency, CODE_TYPE_CONTINUOUS_TONE, code);
-                    Hunt_Reset();
-                    return;
-                }
-                sHuntCssResultType = CODE_TYPE_CONTINUOUS_TONE;
-                sHuntCssResultCode = code;
+                // Accept the first valid reading. Demanding two matching
+                // reads was the source of the intermittency: the re-arm
+                // between them resets the detector, so getting two in a
+                // row was luck. The chip withholds a result (NOT_FOUND)
+                // until its own validation passes, so a reported tone is
+                // already trustworthy.
+                INTERCEPTOR_LogNewCapture(sHuntFrequency, CODE_TYPE_CONTINUOUS_TONE, code);
+                Hunt_Reset();
+                return;
             }
         }
 
@@ -645,10 +647,6 @@ static void Do_Hunt_Cycle(void) {
             return;
         }
 
-        // Clean reset cycle before the next reading, exactly as stock does:
-        // disable, then SetScanFrequency (which re-enables via RX_TurnOn).
-        // Skipping the disable left stale detector state behind.
-        BK4819_Disable();
         BK4819_SetScanFrequency(sHuntFrequency);
         return;
     }
@@ -877,14 +875,11 @@ static void Do_BandSweep_Cycle(void) {
         } else if (!resolved && cssResult == BK4819_CSS_RESULT_CTCSS) {
             uint8_t code = DCS_GetCtcssCode((int)ctcssFreq);
             if (code != 0xFF) {
-                if (code == sSweepCssResultCode && sSweepCssResultType == CODE_TYPE_CONTINUOUS_TONE) {
-                    foundType = CODE_TYPE_CONTINUOUS_TONE;
-                    foundCode = code;
-                    resolved  = true;
-                } else {
-                    sSweepCssResultType = CODE_TYPE_CONTINUOUS_TONE;
-                    sSweepCssResultCode = code;
-                }
+                // First valid reading is accepted - see the matching note
+                // in Do_Hunt_Cycle.
+                foundType = CODE_TYPE_CONTINUOUS_TONE;
+                foundCode = code;
+                resolved  = true;
             }
         }
 
