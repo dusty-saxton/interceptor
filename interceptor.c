@@ -894,20 +894,14 @@ static void Do_BandSweep_Cycle(void) {
         if (!blacklisted) {
             gInterceptorHuntTickerActive = false;
             // Don't save yet - scan for a CTCSS/DCS tone first, same
-            // mechanism hunt uses. Saving with CODE_TYPE_OFF unconditionally
-            // (the previous behavior) meant a real tone on the channel was
-            // never detected or saved, even though hunt could find it
-            // moments later on the exact same frequency.
+            // mechanism the stock scanner uses. Saving with CODE_TYPE_OFF
+            // unconditionally (an earlier behavior) meant a real tone was
+            // never detected or saved.
             //
-            // Must explicitly enable frequency-scan mode before this -
-            // unlike hunt (which is already in scan mode from its earlier
-            // frequency-counting stage), the radio here was just in normal
-            // FM receive mode from Check_Candidate_Frequency above.
-            // BK4819_SetScanFrequency alone never touches the scan-enable
-            // bit, so without this the chip was still in receive mode and
-            // the tone-scan result was reading meaningless register state -
-            // the confirmed reason a real tone was never actually detected.
-            BK4819_EnableFrequencyScan();
+            // SetScanFrequency ALONE puts the chip into tone-scan mode -
+            // exactly as app/scanner.c does it. Do NOT call
+            // EnableFrequencyScan first: that re-arms frequency-counting
+            // mode right when tone-scan mode needs to be active.
             BK4819_SetScanFrequency(sSweepFreq);
             sSweepCssAttempts   = 0;
             sSweepCssResultType = CODE_TYPE_OFF;
@@ -1023,9 +1017,15 @@ void INTERCEPTOR_Engine_Tick(void) {
         #define HUNT_MAX_TURN_TICKS 150
 
         if (huntOwnsTuner) {
+            uint8_t stateBefore = sHuntState;
             Do_Hunt_Cycle();
             huntTurnTicks++;
-            if (sHuntState == HUNT_IDLE) {
+            // Yield to grid-check only when hunt has RETURNED to idle after
+            // actually doing work (i.e. it was mid-scan and just completed
+            // or reset) - not when it's merely idle at the start, which is
+            // the state it needs to begin from. Yielding on bare idle
+            // interrupted the frequency scan before it could ever lock.
+            if (sHuntState == HUNT_IDLE && stateBefore != HUNT_IDLE) {
                 huntOwnsTuner = false;
                 huntTurnTicks = 0;
             } else if (huntTurnTicks >= HUNT_MAX_TURN_TICKS) {
