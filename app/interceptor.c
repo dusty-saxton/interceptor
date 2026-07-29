@@ -39,6 +39,7 @@ static uint16_t CurrentSlotIndex(void) {
 // mechanism this firmware already uses to restore VFOs elsewhere.
 static VFO_Info_t sInterceptorTxVfo;
 static VFO_Info_t *sSavedTxVfo = NULL;
+static VFO_Info_t *sSavedRxVfo = NULL;
 
 // Reads a real memory channel's full saved configuration directly by
 // index - no searching needed, since cells now store exactly which
@@ -140,7 +141,9 @@ static void Begin_Interceptor_PTT(void)
     RADIO_ConfigureSquelchAndOutputPower(&sInterceptorTxVfo);
 
     sSavedTxVfo = gTxVfo;
+    sSavedRxVfo = gRxVfo;
     gTxVfo = &sInterceptorTxVfo;
+    gRxVfo = &sInterceptorTxVfo;
 
     GENERIC_Key_PTT(true); // reuse the real, existing PTT-press/TX-safety path
 }
@@ -155,13 +158,15 @@ void End_Interceptor_PTT(void)
     GENERIC_Key_PTT(false); // reuse the real, existing PTT-release/end-of-TX path
 
     if (sSavedTxVfo != NULL) {
-        // Don't just restore the saved pointer directly - force the same
+        // Don't just restore the saved pointers directly - force the same
         // full reconfigure this firmware already uses elsewhere (see
-        // gFlagReconfigureVfos in app/app.c), so gTxVfo/gRxVfo and all
-        // hardware registers get properly re-derived from the real,
-        // persistent VFO settings rather than trusted to still be correct.
+        // gFlagReconfigureVfos in app/app.c). That triggers RADIO_SelectVfos(),
+        // which correctly re-derives BOTH gTxVfo and gRxVfo from the real,
+        // persistent VFO settings - confirmed directly in radio.c - so both
+        // overrides get properly undone, not just one.
         gFlagReconfigureVfos = true;
         sSavedTxVfo = NULL;
+        sSavedRxVfo = NULL;
     }
 }
 

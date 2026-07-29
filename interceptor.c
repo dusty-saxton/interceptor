@@ -42,7 +42,7 @@ SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 14400000, 14800000, 2500, "Ham 2m",      false },
     { 21900000, 22500000, 2500, "Ham 1.25m",   false },
     { 42000000, 45000000, 2500, "Ham 70cm",    false },
-    { 15000000, 17400000, 1250, "VHF LandMob", false },
+    { 15000000, 17400000, 750,  "VHF LandMob", false },
     { 40000000, 42000000, 1250, "UHF Fed",     false },
     { 45000000, 47000000, 1250, "UHF LandMob", false },
     { 80600000, 82400000, 1250, "800 PS",      false },
@@ -54,7 +54,7 @@ bool    gBandSelectEnteringFreq = false;
 uint8_t gBandSelectEnteringWhich = 0;
 uint8_t gBandSelectStepOptionIndex = 4;
 const uint32_t gStepOptions[STEP_OPTION_COUNT] = { 250, 500, 625, 1000, 1250, 2000, 2500 };
-bool    gExcludeNoaa = false;
+bool    gExcludeNoaa = true; // "Include NOAA" defaults unchecked
 bool    gInterceptorPendingBlacklistBuzz = false;
 bool    gSweepNeedsReinit = true;
 bool     gInterceptorHuntTickerActive = false;
@@ -879,6 +879,16 @@ static void Do_BandSweep_Cycle(void) {
             // (the previous behavior) meant a real tone on the channel was
             // never detected or saved, even though hunt could find it
             // moments later on the exact same frequency.
+            //
+            // Must explicitly enable frequency-scan mode before this -
+            // unlike hunt (which is already in scan mode from its earlier
+            // frequency-counting stage), the radio here was just in normal
+            // FM receive mode from Check_Candidate_Frequency above.
+            // BK4819_SetScanFrequency alone never touches the scan-enable
+            // bit, so without this the chip was still in receive mode and
+            // the tone-scan result was reading meaningless register state -
+            // the confirmed reason a real tone was never actually detected.
+            BK4819_EnableFrequencyScan();
             BK4819_SetScanFrequency(sSweepFreq);
             sSweepCssAttempts   = 0;
             sSweepCssResultType = CODE_TYPE_OFF;
