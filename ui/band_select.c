@@ -70,7 +70,7 @@ void UI_DisplayBandSelect(void)
         // Just checkbox + name on every row now - the frequency range
         // lives in the header instead, keeping every row short and safe.
         if (idx == BAND_SELECT_NOAA_ROW) {
-            snprintf(line, sizeof(line), "%s Exclude NOAA", gExcludeNoaa ? "[X]" : "[ ]");
+            snprintf(line, sizeof(line), "%s Include NOAA", gExcludeNoaa ? "[ ]" : "[X]");
         } else {
             snprintf(line, sizeof(line), "%s %s",
                      gSweepBands[idx].Enabled ? "[X]" : "[ ]", gSweepBands[idx].Name);
