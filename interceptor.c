@@ -39,9 +39,9 @@ bool     gInterceptorBandSweepActive = false;
 
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  1000, "Ham 6m",      false },
-    { 14400000, 14800000, 1250, "Ham 2m",      false },
+    { 14400000, 14800000, 1000, "Ham 2m",      false },
     { 21900000, 22500000, 2500, "Ham 1.25m",   false },
-    { 42000000, 45000000, 1250, "Ham 70cm",    false },
+    { 42000000, 45000000, 1000, "Ham 70cm",    false },
     { 15000000, 17400000, 750,  "VHF LandMob", false },
     { 40000000, 42000000, 1250, "UHF Fed",     false },
     { 45000000, 47000000, 1250, "UHF LandMob", false },
