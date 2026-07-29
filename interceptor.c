@@ -40,10 +40,10 @@ bool     gInterceptorBandSweepActive = false;
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  1000, "Ham 6m",      false },
     { 14400000, 14800000, 1000, "Ham 2m",      false },
-    { 21900000, 22500000, 2500, "Ham 1.25m",   false },
+    { 22200000, 22500000, 2500, "Ham 1.25m",   false },
     { 42000000, 45000000, 1000, "Ham 70cm",    false },
-    { 15000000, 17400000, 750,  "VHF LandMob", false },
-    { 40000000, 42000000, 1250, "UHF Fed",     false },
+    { 15080000, 17400000, 750,  "VHF LandMob", false },
+    { 38000000, 40000000, 1250, "UHF Fed",     false },
     { 45000000, 47000000, 1250, "UHF LandMob", false },
     { 80600000, 82400000, 1250, "800 PS",      false },
     { 0,        0,        1250, "Manual",      false },
@@ -526,6 +526,7 @@ static uint8_t  sHuntStableCount = 0;
 static uint8_t  sHuntCssAttempts = 0;
 #define HUNT_MAX_TURN_TICKS   150 // ~1.5s - enough for 3 stable 0.2s counter reads
 #define HUNT_CSS_POLL_10MS      2 // poll the tone scan ~every 20ms, matching the stock scanner's own pacing
+#define HUNT_CSS_MAX_POLLS    100 // ~2s of real time - CTCSS detection typically resolves in 200-600ms
 static uint8_t  sHuntCssResultType = CODE_TYPE_OFF;
 static uint8_t  sHuntCssResultCode = 0;
 
@@ -583,16 +584,29 @@ static void Do_Hunt_Cycle(void) {
     }
 
     if (sHuntState == HUNT_CSS) {
-        // Only poll on a real 10ms cadence - without this the 20-attempt
-        // budget is spent in microseconds at main-loop rate, so the tone
-        // scan always "gives up" before the hardware has had any chance
-        // to actually resolve a tone.
+        // Only poll on a real 10ms cadence - without this the attempt
+        // budget is spent in microseconds at main-loop rate.
         if (sHuntCssPollDelay > 0) return;
         sHuntCssPollDelay = HUNT_CSS_POLL_10MS;
 
         uint32_t cdcssFreq;
         uint16_t ctcssFreq;
         BK4819_CssScanResult_t result = BK4819_GetCxCSSScanResult(&cdcssFreq, &ctcssFreq);
+
+        // Nothing resolved yet: just wait and let the hardware keep
+        // integrating. Critically do NOT re-arm the scan here -
+        // BK4819_SetScanFrequency resets the tone detector, and a CTCSS
+        // tone (~13ms per cycle at 75Hz) needs many cycles to measure.
+        // Re-arming every poll wiped that progress every time, so no tone
+        // could ever resolve. The stock scanner (app/scanner.c) likewise
+        // breaks out on NOT_FOUND without touching the detector.
+        if (result == BK4819_CSS_RESULT_NOT_FOUND) {
+            if (++sHuntCssAttempts >= HUNT_CSS_MAX_POLLS) {
+                INTERCEPTOR_LogNewCapture(sHuntFrequency, CODE_TYPE_OFF, 0);
+                Hunt_Reset();
+            }
+            return;
+        }
 
         if (result == BK4819_CSS_RESULT_CDCSS) {
             uint8_t code = DCS_GetCdcssCode(cdcssFreq);
@@ -614,8 +628,10 @@ static void Do_Hunt_Cycle(void) {
             }
         }
 
+        // A real result came back but wasn't conclusive - only NOW is it
+        // correct to re-arm and take another reading, same as stock.
         sHuntCssAttempts++;
-        if (sHuntCssAttempts >= CSS_MAX_ATTEMPTS) {
+        if (sHuntCssAttempts >= HUNT_CSS_MAX_POLLS) {
             INTERCEPTOR_LogNewCapture(sHuntFrequency, CODE_TYPE_OFF, 0);
             Hunt_Reset();
             return;
@@ -828,14 +844,25 @@ static void Do_BandSweep_Cycle(void) {
         uint8_t foundCode = 0;
         bool    resolved  = false;
 
-        if (cssResult == BK4819_CSS_RESULT_CDCSS) {
+        // Nothing resolved yet: wait, and do NOT re-arm - see the same
+        // logic in Do_Hunt_Cycle. BK4819_SetScanFrequency resets the tone
+        // detector, so re-arming on every poll prevented any tone from
+        // ever being measured.
+        if (cssResult == BK4819_CSS_RESULT_NOT_FOUND) {
+            if (++sSweepCssAttempts < HUNT_CSS_MAX_POLLS) return;
+            foundType = CODE_TYPE_OFF; // out of time - save carrier-only
+            foundCode = 0;
+            resolved  = true;
+        }
+
+        if (!resolved && cssResult == BK4819_CSS_RESULT_CDCSS) {
             uint8_t code = DCS_GetCdcssCode(cdcssFreq);
             if (code != 0xFF) {
                 foundType = CODE_TYPE_DIGITAL;
                 foundCode = code;
                 resolved  = true;
             }
-        } else if (cssResult == BK4819_CSS_RESULT_CTCSS) {
+        } else if (!resolved && cssResult == BK4819_CSS_RESULT_CTCSS) {
             uint8_t code = DCS_GetCtcssCode((int)ctcssFreq);
             if (code != 0xFF) {
                 if (code == sSweepCssResultCode && sSweepCssResultType == CODE_TYPE_CONTINUOUS_TONE) {
@@ -851,7 +878,7 @@ static void Do_BandSweep_Cycle(void) {
 
         if (!resolved) {
             sSweepCssAttempts++;
-            if (sSweepCssAttempts >= CSS_MAX_ATTEMPTS) {
+            if (sSweepCssAttempts >= HUNT_CSS_MAX_POLLS) {
                 resolved  = true; // gave up - save with no tone rather than none at all
                 foundType = CODE_TYPE_OFF;
                 foundCode = 0;
@@ -859,7 +886,8 @@ static void Do_BandSweep_Cycle(void) {
         }
 
         if (!resolved) {
-            BK4819_SetScanFrequency(sSweepFreq); // keep scanning
+            // Real-but-inconclusive result - only now is re-arming correct.
+            BK4819_SetScanFrequency(sSweepFreq);
             return;
         }
 
