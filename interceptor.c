@@ -544,7 +544,21 @@ static void Hunt_Reset(void) {
 
 static void Do_Hunt_Cycle(void) {
     if (sHuntState == HUNT_IDLE) {
-        BK4819_PickRXFilterPathBasedOnFrequency(gRxVfo->pRX->Frequency);
+        // The radio has two separate RF front-end amplifiers - a VHF LNA
+        // for below 280MHz and a UHF LNA above it - and normally only one
+        // is powered, chosen from the frequency being received. Hunt is
+        // measuring an UNKNOWN frequency, so it can't pick correctly in
+        // advance. Previously it followed gRxVfo's current frequency,
+        // which meant hunt could only ever hear the band the VFO happened
+        // to be parked in: with the VFO on 2m, a 70cm signal physically
+        // never reached the frequency counter.
+        //
+        // Power both so any nearby transmission gets through regardless of
+        // band. RADIO_SetupRegisters restores the correct single path as
+        // soon as we tune to a captured frequency, so this only applies
+        // while actively hunting.
+        BK4819_ToggleGpioOut(BK4819_GPIO4_PIN32_VHF_LNA, true);
+        BK4819_ToggleGpioOut(BK4819_GPIO3_PIN31_UHF_LNA, true);
         BK4819_EnableFrequencyScan();
         sHuntState = HUNT_FREQ;
         sHuntStableCount = 0;
