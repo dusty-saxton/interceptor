@@ -345,6 +345,15 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define SPEECH_ARTIC_MIN_DELTA   1  // below this the envelope is effectively static
 #define SPEECH_ARTIC_MAX_DELTA  15  // above this it's a switching transient, not a syllable
 #define SPEECH_MIN_ARTIC_PCT    20  // speech articulates on at least this % of ticks
+// Emphatic verdict. A signal scoring below this has essentially NO speech
+// character at all - it is a bare carrier or a digital symbol stream, not
+// a quiet or clipped conversation. Digital voice modes land here reliably:
+// they transmit continuously at constant envelope, and TDMA modes like DMR
+// switch in hard 30ms blocks whose transitions are far too large to count
+// as articulation. Since the radio cannot decode digital anyway, there is
+// nothing to lose by removing these from the scan on the first pass rather
+// than waiting for three strikes.
+#define EMPHATIC_NOISE_ARTIC_PCT 5
 #define NOISE_MIN_SAMPLES       50  // don't judge on too little data
 #define NOISE_LOUD_THRESHOLD 18 // was 30. The meter floors at 10, so 30 meant a quieter steady carrier could never be flagged no matter how flat it was - that's why two noise sources of the same character got opposite verdicts based only on strength.
 #define NOISE_EARLY_EXIT_10MS_TICKS 50
@@ -547,6 +556,14 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                             gScanList[dwellSlot].NoiseFlagCount = consistent
                                 ? (uint8_t)(gScanList[dwellSlot].NoiseFlagCount + 1) : 1;
                             gScanList[dwellSlot].NoiseFlagLevel = avgLevel;
+
+                            // Zero speech character - a bare carrier or a
+                            // digital symbol stream. There's no ambiguity
+                            // worth protecting against and the radio can't
+                            // decode digital anyway, so skip the strike
+                            // count and remove it from the scan now.
+                            if (articPct < EMPHATIC_NOISE_ARTIC_PCT)
+                                gScanList[dwellSlot].NoiseFlagCount = NOISE_FLAGS_BEFORE_BLACKLIST;
 
                             if (gScanList[dwellSlot].NoiseFlagCount >= NOISE_FLAGS_BEFORE_BLACKLIST) {
                                 INTERCEPTOR_DeleteAndBlacklist(dwellSlot, false);
