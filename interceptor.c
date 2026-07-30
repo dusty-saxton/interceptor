@@ -284,7 +284,15 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 #define REPLY_WAIT_10MS_TICKS  400 // ~4s grace before abandoning a dwell - gives a conversation more room to breathe between overs before the engine gives up and resumes scanning
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
-#define MAX_DWELL_10MS_TICKS 2000 // ~20s - field-tested; combined with the longer grace period, fixed a saved cell dropping and reconnecting roughly every 6 seconds in real use
+// 0 = NO hard cap. The dwell now stays open for as long as the signal is
+// genuinely present, and ends naturally through Handle_Active_Channel_Dwell:
+// signal drops -> REPLY_WAIT grace -> dwell ends. A fixed cap here was a
+// blind cutoff that killed audio mid-transmission regardless of whether
+// anyone was still talking. Protection against a stuck carrier holding the
+// radio forever is still in place, but comes from the noise heuristic
+// below (which judges at 1.5s on actual audio behaviour) rather than from
+// a timer that can't tell a long conversation from a dead carrier.
+#define MAX_DWELL_10MS_TICKS 0
 #define NOISE_CHECK_10MS_TICKS 150
 #define NOISE_VARIANCE_THRESHOLD 20
 #define NOISE_LOUD_THRESHOLD 30
@@ -458,7 +466,14 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                     }
 
                     if (flatAndLoud) {
-                        if (sDwellDurationCountdown > NOISE_EARLY_EXIT_10MS_TICKS)
+                        // Arm the exit countdown. Must also fire when the
+                        // counter is 0, which is now the normal idle state
+                        // since the dwell has no hard cap - the old
+                        // "> NOISE_EARLY_EXIT" test alone would never be
+                        // true and stuck-carrier protection would silently
+                        // stop working.
+                        if (sDwellDurationCountdown == 0
+                            || sDwellDurationCountdown > NOISE_EARLY_EXIT_10MS_TICKS)
                             sDwellDurationCountdown = NOISE_EARLY_EXIT_10MS_TICKS;
 
                         if (dwellSlot != 0xFFFF && !gScanList[dwellSlot].IsLocked) {
