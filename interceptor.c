@@ -86,6 +86,26 @@ static void Tune_RxVfo_To(uint32_t freq, uint8_t codeType, uint8_t code) {
     RADIO_SetupRegisters(true);
 }
 
+// Narrow bandwidth above is correct while CHECKING candidate cells - it
+// stops one strong signal from bleeding into several adjacent saved cells
+// and lighting them all up. It is wrong once we're actually LISTENING
+// though: a wide-deviation FM signal (normal for ham and most analog
+// traffic) squeezed through a 12.5kHz filter gets clipped, so it reads as
+// weaker than it is and the squelch flutters open and closed. That's the
+// mid-conversation dropout in grid mode that never happens on the VFO
+// screen, where the filter matches the signal.
+//
+// So: narrow to find it, wide to hear it. Widening only costs a little
+// adjacent-channel noise, and by this point we're already locked onto a
+// confirmed signal, so there's nothing left to falsely trigger.
+static void Widen_For_Dwell(void) {
+    if (gRxVfo->CHANNEL_BANDWIDTH != BK4819_FILTER_BW_WIDE) {
+        gRxVfo->CHANNEL_BANDWIDTH = BK4819_FILTER_BW_WIDE;
+        RADIO_ConfigureSquelchAndOutputPower(gRxVfo);
+        RADIO_SetupRegisters(true);
+    }
+}
+
 // Fast, RSSI-only pre-check - mirrors the stock spectrum analyzer's own
 // retune (app/spectrum.c's SetF()/GetRssi()), reading RSSI almost
 // immediately after retuning rather than waiting through the full,
@@ -524,6 +544,13 @@ static uint8_t  sHuntState = HUNT_IDLE;
 static uint32_t sHuntFrequency = 0;
 static uint8_t  sHuntStableCount = 0;
 static uint8_t  sHuntCssAttempts = 0;
+// The RF front-end has separate VHF and UHF LNA paths and only ONE can be
+// active at a time. Hunt searches for an UNKNOWN frequency, so it can't
+// pick the right one in advance - it previously just used whatever band
+// the VFO happened to be parked on, which is exactly why hunting only
+// ever worked for signals in that same band (2m worked, 70cm didn't).
+// This alternates the path between turns so both bands get covered.
+static bool     sHuntUseUhfPath = false;
 #define HUNT_MAX_TURN_TICKS   150 // ~1.5s - enough for 3 stable 0.2s counter reads
 #define HUNT_CSS_POLL_10MS      2 // 20ms - poll often so a settled result is caught the moment it appears. Safe because we never re-arm on NOT_FOUND, so the detector integrates undisturbed between polls.
 #define HUNT_CSS_MAX_POLLS    100 // ~2s of real time at 20ms per poll
@@ -553,12 +580,19 @@ static void Do_Hunt_Cycle(void) {
         // to be parked in: with the VFO on 2m, a 70cm signal physically
         // never reached the frequency counter.
         //
-        // Power both so any nearby transmission gets through regardless of
-        // band. RADIO_SetupRegisters restores the correct single path as
-        // soon as we tune to a captured frequency, so this only applies
-        // while actively hunting.
-        BK4819_ToggleGpioOut(BK4819_GPIO4_PIN32_VHF_LNA, true);
-        BK4819_ToggleGpioOut(BK4819_GPIO3_PIN31_UHF_LNA, true);
+        // Powering BOTH simultaneously was tried and does not work: the two
+        // front-end paths share RF plumbing, so with both switched in the
+        // VHF branch loads down the UHF signal and 70cm stays deaf while
+        // 2m works fine. Instead, alternate which single path is active on
+        // each hunt turn, so both bands get a clean, full-sensitivity look.
+        // The values below are just representative frequencies either side
+        // of the driver's 280MHz VHF/UHF split.
+        //
+        // Alternating per TURN rather than per reading matters: the
+        // frequency counter needs three consistent readings to lock, and
+        // switching the front-end mid-measurement would corrupt them.
+        sHuntUseUhfPath = !sHuntUseUhfPath;
+        BK4819_PickRXFilterPathBasedOnFrequency(sHuntUseUhfPath ? 40000000 : 14500000);
         BK4819_EnableFrequencyScan();
         sHuntState = HUNT_FREQ;
         sHuntStableCount = 0;
@@ -709,6 +743,7 @@ static void Do_GridCheck_Cycle(void) {
         // Cursor does NOT snap to the active cell - cursor stays where
         // the user left it so the taskbar always shows their chosen
         // cell's frequency, not whatever the scanner last heard.
+        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -758,6 +793,7 @@ static bool Do_GridCheck_Pass(void) {
         if (gScanList[sGridPassIdx].HitCount < 255) gScanList[sGridPassIdx].HitCount++;
         gInterceptorActiveFrequency = gScanList[sGridPassIdx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)sGridPassIdx; // tick-mark moves, cursor doesn't
+        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
         gInterceptorCheckingSlot = -1;
@@ -807,6 +843,7 @@ static void Do_FastGridScan_Cycle(void) {
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
         // Cursor does NOT snap - stays where user left it.
+        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -928,6 +965,7 @@ static void Do_BandSweep_Cycle(void) {
                 break;
             }
         }
+        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
         return;
