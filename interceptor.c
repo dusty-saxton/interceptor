@@ -281,7 +281,7 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
     AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 }
 
-#define REPLY_WAIT_10MS_TICKS  300 // ~3s grace before abandoning a dwell - field-tested value; the original ~1s wasn't long enough to bridge a real gap that was causing a saved cell to drop and reconnect roughly every 6 seconds
+#define REPLY_WAIT_10MS_TICKS  400 // ~4s grace before abandoning a dwell - gives a conversation more room to breathe between overs before the engine gives up and resumes scanning
 #define METER_REDRAW_10MS_TICKS 10
 #define TICKER_REDRAW_10MS_TICKS 15
 #define MAX_DWELL_10MS_TICKS 2000 // ~20s - field-tested; combined with the longer grace period, fixed a saved cell dropping and reconnecting roughly every 6 seconds in real use
