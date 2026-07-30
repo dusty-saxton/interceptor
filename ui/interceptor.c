@@ -307,9 +307,15 @@ void UI_DisplayInterceptorGridPage(void)
             continue;
         }
 
-        if (gScanList[idx].Frequency == 0 && idx == nextEmptySlot && gInterceptorHuntTickerActive) {
+        if (gScanList[idx].Frequency == 0 && idx == nextEmptySlot && gInterceptorHuntTickerActive
+            && gInterceptorActiveFrequency == 0) {
             // Live scanning ticker - shows the frequency hunt is currently
             // evaluating, right in the cell a new capture would land in.
+            // Suppressed entirely while something is actually playing
+            // (gInterceptorActiveFrequency != 0). The engine clears the
+            // ticker flag on every activation path, but gating here too
+            // makes it structurally impossible for a stale ticker to sit
+            // beside the live cell and look like the active one.
             // Uses the tight-packing renderer for full 3-decimal precision -
             // a normal 7px/char string can't fit 6 digits + a period in
             // this cell width at all (42px needed vs ~41px available).

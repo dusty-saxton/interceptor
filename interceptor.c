@@ -756,6 +756,10 @@ static void Do_GridCheck_Cycle(void) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
+        // Stop the scanning ticker. Only sweep used to do this, so a stale
+        // ticker cell kept drawing while a grid cell was actually playing,
+        // making it look like a different cell was the live one.
+        gInterceptorHuntTickerActive = false;
         // Cursor does NOT snap to the active cell - cursor stays where
         // the user left it so the taskbar always shows their chosen
         // cell's frequency, not whatever the scanner last heard.
@@ -809,6 +813,7 @@ static bool Do_GridCheck_Pass(void) {
         if (gScanList[sGridPassIdx].HitCount < 255) gScanList[sGridPassIdx].HitCount++;
         gInterceptorActiveFrequency = gScanList[sGridPassIdx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)sGridPassIdx; // tick-mark moves, cursor doesn't
+        gInterceptorHuntTickerActive = false; // stop the ticker - this cell is the live one now
         Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
@@ -858,6 +863,7 @@ static void Do_FastGridScan_Cycle(void) {
         if (gScanList[checking_idx].HitCount < 255) gScanList[checking_idx].HitCount++;
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
+        gInterceptorHuntTickerActive = false; // stop the ticker - this cell is the live one now
         // Cursor does NOT snap - stays where user left it.
         Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
