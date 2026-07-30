@@ -19,6 +19,26 @@
 InterceptorChannel_t gScanList[GRID_TOTAL_SLOTS] = {0};
 uint32_t gLockoutList[MAX_LOCKOUTS] = {0};
 uint8_t  gLockoutCount = 0;
+
+// How close a frequency must be to a blacklist entry to count as the same
+// signal. Exact equality was the original bug: hunt derives frequencies
+// from the hardware counter, which jitters (that's why hunt itself demands
+// three readings within 1kHz before trusting one), so a frequency
+// blacklisted from a hunt capture practically never equalled a later
+// reading exactly - and the same noise kept coming back every scan.
+// 2.5kHz comfortably covers that jitter while staying well inside one
+// channel spacing, so neighbouring channels are never blocked by mistake.
+#define BLACKLIST_MATCH_TOLERANCE 250
+
+static bool Is_Blacklisted(uint32_t freq) {
+    for (uint8_t i = 0; i < gLockoutCount; i++) {
+        uint32_t entry = gLockoutList[i];
+        uint32_t delta = (entry > freq) ? (entry - freq) : (freq - entry);
+        if (delta <= BLACKLIST_MATCH_TOLERANCE) return true;
+    }
+    return false;
+}
+
 uint8_t  gUserSelectedChannelIndex = 0;
 uint8_t  gCurrentGridPage = 0;
 bool     gSniffingEnabled = false;
@@ -293,14 +313,45 @@ void INTERCEPTOR_DeleteOnly(uint16_t slotIndex) {
 // below (which judges at 1.5s on actual audio behaviour) rather than from
 // a timer that can't tell a long conversation from a dead carrier.
 #define MAX_DWELL_10MS_TICKS 0
-#define NOISE_CHECK_10MS_TICKS 150
-#define NOISE_VARIANCE_THRESHOLD 20
-#define NOISE_LOUD_THRESHOLD 30
+#define NOISE_CHECK_10MS_TICKS 300 // 3s sample window (was 1.5s). Longer helps BOTH goals: voice gets more chance to show a pause or level swing so it passes, while steady noise stays flat and is still caught. Transmissions shorter than this are never judged at all, which fails safe toward keeping them.
+// ---------------------------------------------------------------------
+// Separating speech from noise, mathematically.
+//
+// The old tests judged AMPLITUDE (is it loud? does it dip?). That is the
+// wrong axis: a quiet steady carrier and a loud steady carrier are
+// identical in CHARACTER but land on opposite sides of a loudness
+// threshold - which is exactly why two noise channels behaving the same
+// way got opposite verdicts. A bursting source defeated it from the other
+// direction, since its full-scale gaps read as "speech pauses".
+//
+// The property that actually separates them is CONTINUITY OF CHANGE:
+//
+//   speech          - continuously articulated. Syllables are always
+//                     forming and decaying, so the envelope changes by a
+//                     small-to-moderate amount on MOST sampling ticks.
+//   steady carrier  - piecewise constant. Change per tick is ~0, whether
+//                     the carrier is loud or quiet.
+//   bursting source - also piecewise constant: flat, then one enormous
+//                     full-scale jump, then flat again. Only a handful of
+//                     ticks change at all, and those change far harder
+//                     than any syllable does.
+//
+// So: count the ticks whose change lands in the speech band - a real
+// change, but below switching-transient size - and take that as a
+// percentage of samples. Speech scores high; both noise types score near
+// zero because they are flat between transitions. The statistic never
+// references signal level, so it treats a weak steady carrier exactly
+// like a strong one.
+#define SPEECH_ARTIC_MIN_DELTA   1  // below this the envelope is effectively static
+#define SPEECH_ARTIC_MAX_DELTA  15  // above this it's a switching transient, not a syllable
+#define SPEECH_MIN_ARTIC_PCT    20  // speech articulates on at least this % of ticks
+#define NOISE_MIN_SAMPLES       50  // don't judge on too little data
+#define NOISE_LOUD_THRESHOLD 18 // was 30. The meter floors at 10, so 30 meant a quieter steady carrier could never be flagged no matter how flat it was - that's why two noise sources of the same character got opposite verdicts based only on strength.
 #define NOISE_EARLY_EXIT_10MS_TICKS 50
 #define NOISE_FLAGS_BEFORE_BLACKLIST 3
 #define NOISE_STEP_DELTA_THRESHOLD 2
 #define NOISE_CROSSPASS_TOLERANCE 4
-#define NOISE_PAUSE_THRESHOLD 20
+#define NOISE_PAUSE_THRESHOLD 14 // was 20. With a meter floor of 10, treating 20 as a 'speech pause' meant ordinary wander in a weak signal read as speech and exempted it. 14 requires a genuine dip toward the floor.
 
 // Grid-check runs once per second during sweep - enough to catch any
 // conversation on a saved cell, without constantly stealing the radio
@@ -411,6 +462,7 @@ void INTERCEPTOR_TimeSlice10ms(void) {
         static uint8_t sDwellMaxStepDelta = 0;
         static uint32_t sDwellMeterSum = 0;
         static uint16_t sDwellSampleCount = 0;
+        static uint16_t sDwellArticCount = 0;
         static uint16_t sNoiseCheckCountdown = 0;
         static bool sNoiseCheckDone = false;
 
@@ -424,6 +476,7 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                 sDwellMaxStepDelta = 0;
                 sDwellMeterSum = 0;
                 sDwellSampleCount = 0;
+                sDwellArticCount = 0;
                 sNoiseCheckCountdown = NOISE_CHECK_10MS_TICKS;
                 sNoiseCheckDone = false;
             } else if (sDwellDurationCountdown > 0) {
@@ -443,6 +496,10 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                     ? (uint8_t)(gInterceptorMeterPercent - sDwellMeterPrev)
                     : (uint8_t)(sDwellMeterPrev - gInterceptorMeterPercent);
                 if (stepDelta > sDwellMaxStepDelta) sDwellMaxStepDelta = stepDelta;
+                // Count ticks whose change looks like speech articulation:
+                // a real change, but not a full-scale switching transient.
+                if (stepDelta >= SPEECH_ARTIC_MIN_DELTA && stepDelta <= SPEECH_ARTIC_MAX_DELTA)
+                    sDwellArticCount++;
                 sDwellMeterPrev = gInterceptorMeterPercent;
             }
             sDwellMeterSum += gInterceptorMeterPercent;
@@ -452,11 +509,15 @@ void INTERCEPTOR_TimeSlice10ms(void) {
                 sNoiseCheckCountdown--;
                 if (sNoiseCheckCountdown == 0) {
                     sNoiseCheckDone = true;
-                    bool overallFlat = (sDwellMeterMax - sDwellMeterMin) < NOISE_VARIANCE_THRESHOLD;
-                    bool smoothDrift = sDwellMaxStepDelta < NOISE_STEP_DELTA_THRESHOLD;
-                    bool loud        = sDwellMeterMax > NOISE_LOUD_THRESHOLD;
-                    bool hadPause    = sDwellMeterMin <= NOISE_PAUSE_THRESHOLD;
-                    bool flatAndLoud = (overallFlat || smoothDrift) && loud && !hadPause;
+                    // Percentage of ticks showing speech-like articulation.
+                    // Near zero for a steady carrier (nothing changes) AND
+                    // for a bursting source (flat between jumps, and the
+                    // jumps themselves are too large to count as speech).
+                    // High for real speech, at any volume.
+                    uint16_t articPct = (sDwellSampleCount > 0)
+                        ? (uint16_t)((sDwellArticCount * 100UL) / sDwellSampleCount) : 100;
+                    bool enoughData = sDwellSampleCount >= NOISE_MIN_SAMPLES;
+                    bool flatAndLoud = enoughData && (articPct < SPEECH_MIN_ARTIC_PCT);
                     uint8_t avgLevel = (sDwellSampleCount > 0)
                         ? (uint8_t)(sDwellMeterSum / sDwellSampleCount) : 0;
 
@@ -648,9 +709,7 @@ static void Do_Hunt_Cycle(void) {
             return;
         }
 
-        bool blacklisted = false;
-        for (uint8_t i = 0; i < gLockoutCount; i++)
-            if (gLockoutList[i] == sHuntFrequency) { blacklisted = true; break; }
+        bool blacklisted = Is_Blacklisted(sHuntFrequency);
 
         if (blacklisted) { Hunt_Reset(); return; }
 
@@ -901,6 +960,15 @@ static void Skip_Excluded_Ranges(uint32_t *freq, uint32_t stepSize) {
     if (gExcludeNoaa && *freq >= NOAA_EXCLUDE_START && *freq <= NOAA_EXCLUDE_END) {
         *freq = NOAA_EXCLUDE_END + stepSize;
     }
+    // Step straight over blacklisted frequencies so sweep never tunes to
+    // them at all. Previously the blacklist was only consulted after
+    // Check_Candidate_Frequency had already settled there - so sweep still
+    // stopped, opened squelch and blipped audio on known noise, just
+    // without saving it. Bounded loop so a dense blacklist can't stall the
+    // sweep.
+    for (uint8_t guard = 0; guard < MAX_LOCKOUTS && Is_Blacklisted(*freq); guard++) {
+        *freq += stepSize;
+    }
 }
 
 static uint8_t  sSweepBandIndex = SWEEP_BAND_COUNT - 1;
@@ -1046,9 +1114,7 @@ static void Do_BandSweep_Cycle(void) {
     if (result == 0) return;
 
     if (result == 1) {
-        bool blacklisted = false;
-        for (uint8_t i = 0; i < gLockoutCount; i++)
-            if (gLockoutList[i] == sSweepFreq) { blacklisted = true; break; }
+        bool blacklisted = Is_Blacklisted(sSweepFreq);
 
         if (!blacklisted) {
             gInterceptorHuntTickerActive = false;
