@@ -39,9 +39,9 @@ bool     gInterceptorBandSweepActive = false;
 
 SweepBand_t gSweepBands[SWEEP_BAND_COUNT] = {
     { 5000000,  5400000,  1000, "Ham 6m",      false },
-    { 14400000, 14800000, 2500, "Ham 2m",      false },
-    { 21900000, 22500000, 2500, "Ham 1.25m",   false },
-    { 42000000, 45000000, 2500, "Ham 70cm",    false },
+    { 14400000, 14800000, 1000, "Ham 2m",      false },
+    { 21900000, 22500000, 1000, "Ham 1.25m",   false },
+    { 42000000, 45000000, 1000, "Ham 70cm",    false },
     { 15000000, 17400000, 750,  "VHF LandMob", false },
     { 40000000, 42000000, 1250, "UHF Fed",     false },
     { 45000000, 47000000, 1250, "UHF LandMob", false },
@@ -86,21 +86,37 @@ static void Tune_RxVfo_To(uint32_t freq, uint8_t codeType, uint8_t code) {
     RADIO_SetupRegisters(true);
 }
 
-// Narrow bandwidth above is correct while CHECKING candidate cells - it
-// stops one strong signal from bleeding into several adjacent saved cells
-// and lighting them all up. It is wrong once we're actually LISTENING
-// though: a wide-deviation FM signal (normal for ham and most analog
-// traffic) squeezed through a 12.5kHz filter gets clipped, so it reads as
-// weaker than it is and the squelch flutters open and closed. That's the
-// mid-conversation dropout in grid mode that never happens on the VFO
-// screen, where the filter matches the signal.
+// Narrow bandwidth and tone matching above are both correct while CHECKING
+// candidate cells - narrow stops one strong signal bleeding into several
+// adjacent saved cells, and the tone confirms it's the traffic this cell
+// actually represents. Both are wrong once we're LISTENING:
 //
-// So: narrow to find it, wide to hear it. Widening only costs a little
-// adjacent-channel noise, and by this point we're already locked onto a
-// confirmed signal, so there's nothing left to falsely trigger.
-static void Widen_For_Dwell(void) {
+//   - A wide-deviation FM signal squeezed through a 12.5kHz filter gets
+//     clipped, so it reads weaker than it is and the squelch flutters.
+//   - Far more importantly, requiring continuous CTCSS/DCS detection to
+//     keep the squelch open is fragile. Tone decoders drop out constantly
+//     during normal speech (deviation dips, tone notching, path fade), and
+//     every dropout mutes the audio mid-sentence. The VFO main screen
+//     holds the same transmission rock-solid precisely because it has no
+//     tone requirement - it squelches on carrier alone.
+//
+// So: narrow + tone to FIND it, wide + carrier to HEAR it. The cell's
+// stored tone is untouched (only the live receive config is relaxed), so
+// it's re-applied automatically on the next check and still used for PTT.
+static void Relax_Squelch_For_Dwell(void) {
+    bool changed = false;
+
     if (gRxVfo->CHANNEL_BANDWIDTH != BK4819_FILTER_BW_WIDE) {
         gRxVfo->CHANNEL_BANDWIDTH = BK4819_FILTER_BW_WIDE;
+        changed = true;
+    }
+    if (gRxVfo->freq_config_RX.CodeType != CODE_TYPE_OFF) {
+        gRxVfo->freq_config_RX.CodeType = CODE_TYPE_OFF;
+        gRxVfo->freq_config_RX.Code     = 0;
+        changed = true;
+    }
+
+    if (changed) {
         RADIO_ConfigureSquelchAndOutputPower(gRxVfo);
         RADIO_SetupRegisters(true);
     }
@@ -743,7 +759,7 @@ static void Do_GridCheck_Cycle(void) {
         // Cursor does NOT snap to the active cell - cursor stays where
         // the user left it so the taskbar always shows their chosen
         // cell's frequency, not whatever the scanner last heard.
-        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
+        Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -793,7 +809,7 @@ static bool Do_GridCheck_Pass(void) {
         if (gScanList[sGridPassIdx].HitCount < 255) gScanList[sGridPassIdx].HitCount++;
         gInterceptorActiveFrequency = gScanList[sGridPassIdx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)sGridPassIdx; // tick-mark moves, cursor doesn't
-        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
+        Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
         gInterceptorCheckingSlot = -1;
@@ -843,7 +859,7 @@ static void Do_FastGridScan_Cycle(void) {
         gInterceptorActiveFrequency = gScanList[checking_idx].Frequency;
         gInterceptorLastActiveSlot = (int16_t)checking_idx; // tick-mark moves, cursor doesn't
         // Cursor does NOT snap - stays where user left it.
-        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
+        Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
     }
@@ -965,7 +981,7 @@ static void Do_BandSweep_Cycle(void) {
                 break;
             }
         }
-        Widen_For_Dwell(); // narrow to find it, wide to hear it - see note above
+        Relax_Squelch_For_Dwell(); // wide + carrier-only while listening - see note above
         APP_StartListening(FUNCTION_RECEIVE);
         gUpdateDisplay = true;
         return;
